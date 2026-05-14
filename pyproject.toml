@@ -1,0 +1,102 @@
+[project]
+name = "tts"
+version = "0.5.0"
+description = "Local Convolution Aligner-TTS"
+readme = "README.md"
+requires-python = ">=3.13,<3.14"
+authors = [{ name = "Suseong Kim", email = "blue29591@postech.ac.kr" }]
+classifiers = ["Private :: Do Not Upload"]
+dependencies = [
+  "dacite>=1.9.2",
+  "einops>=0.8.2",
+  "glob2>=0.7",
+  "huggingface-hub<1.0",
+  "ipykernel>=7.2.0",
+  "librosa>=0.11.0",
+  "matplotlib>=3.10.8",
+  "nltk>=3.9.3",
+  "noisereduce>=3.0.3",
+  "numpy>=2.3.5",
+  "onnx-pytorch>=0.1.5",
+  "onnxscript>=0.6.2",
+  "pandas>=3.0.1",
+  "phonemizer>=3.3.0",
+  "pytest>=9.0.2",
+  "scipy>=1.17.1",
+  "silero-vad>=6.2.1",
+  "soundfile>=0.13.1",
+  "speechbrain>=1.0.0",
+  "tensorboard>=2.20.0",
+  "torch>=2.10.0",
+  "torchaudio>=2.10.0",
+  "tqdm>=4.66.5",
+]
+
+[dependency-groups]
+dev = []
+
+[build-system]
+requires = ["uv_build>=0.9.11,<0.10.0"]
+build-backend = "uv_build"
+
+[tool.uv]
+required-version = ">=0.9.11"
+keyring-provider = "subprocess"
+reinstall-package = ["onnxruntime-gpu"]
+
+[[tool.uv.index]]
+name = "pytorch-cu128"
+url = "https://download.pytorch.org/whl/cu128"
+explicit = false
+
+[tool.uv.build-backend]
+module-name = "tts"
+module-root = ""
+source-exclude = []
+
+[tool.black]
+line-length = 100
+target-version = ["py313"]
+
+[tool.pyright]
+include = ["tts"]
+pythonVersion = "3.13"
+pythonPlatform = "Linux"
+deprecateTypingAliases = true
+typeCheckingMode = "basic"
+reportPropertyTypeMismatch = "error"
+reportFunctionMemberAccess = "error"
+reportImportCycles = "warning"
+reportUnusedClass = "error"
+reportUnusedFunction = "error"
+reportUnusedVariable = "error"
+reportDuplicateImport = "error"
+reportUntypedFunctionDecorator = "warning"
+reportUntypedClassDecorator = "warning"
+reportUntypedBaseClass = "warning"
+reportUntypedNamedTuple = "warning"
+reportPrivateUsage = "error"
+reportTypeCommentUsage = "error"
+reportConstantRedefinition = "error"
+reportDeprecated = "error"
+reportUninitializedInstanceVariable = "warning"
+reportMissingParameterType = "warning"
+reportMissingTypeArgument = "warning"
+reportUnnecessaryIsInstance = "error"
+reportUnnecessaryCast = "error"
+reportUnnecessaryComparison = "error"
+reportUnnecessaryContains = "error"
+reportImplicitStringConcatenation = "warning"
+reportUnusedExpression = "warning"
+reportUnnecessaryTypeIgnoreComment = "warning"
+reportMatchNotExhaustive = "error"
+reportImplicitOverride = "error"
+reportInvalidStringEscapeSequence = "none"
+
+[tool.isort]
+profile = "black"
+line_length = 100
+
+[tool.pytest]
+addopts = ["--import-mode=importlib"]
+markers = ["cfgs"]

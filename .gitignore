@@ -1,0 +1,11 @@
+.venv/
+
+runs/
+ljspeech_runs/
+checkpoints/
+debug_outputs/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class

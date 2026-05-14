@@ -1,0 +1,3 @@
+SPK_COND_DIM = 192
+SAMPLE_RATE = 22050
+DATA_PARENT_DIR = "/shared/data_zfs/blue2959"

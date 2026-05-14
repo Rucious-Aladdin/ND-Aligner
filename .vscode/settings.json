@@ -1,0 +1,166 @@
+{
+  "better-comments.tags": [
+    {
+      "backgroundColor": "oklch(100% 0 0 / 0.3)",
+      "bold": true,
+      "color": "oklch(100% 0 0)",
+      "italic": true,
+      "tag": ">>",
+      "underline": true
+    },
+    { "italic": true, "tag": ">" },
+    { "bold": true, "tag": "flow:" },
+    {
+      "backgroundColor": "oklch(70% 0.2 138 / 0.06)",
+      "bold": true,
+      "color": "oklch(70% 0.2 138)",
+      "italic": true,
+      "tag": "note:"
+    },
+    {
+      "bold": true,
+      "color": "oklch(70% 0.11 183)",
+      "italic": true,
+      "multiline": true,
+      "tag": ["?", "fyi:"]
+    },
+    {
+      "bold": true,
+      "color": "oklch(65% 0.25 32)",
+      "italic": true,
+      "multiline": true,
+      "tag": ["!", "urgent:", "fixme:"]
+    },
+    {
+      "bold": true,
+      "color": "oklch(75% 0.18 58)",
+      "italic": true,
+      "multiline": true,
+      "tag": ["todo:", "extissue:", "hack:", "deprecated:"]
+    }
+  ],
+  "better-comments.tagsDark": [
+    {
+      "backgroundColor": "oklch(100% 0 0 / 0.08)",
+      "color": "oklch(100% 0 0 / 0.84)",
+      "tag": [">", "flow:"]
+    }
+  ],
+  "better-comments.tagsLight": [
+    { "backgroundColor": "oklch(0% 0 0 / 0.55)", "color": "oklch(100% 0 0)", "tag": ">>" },
+    {
+      "backgroundColor": "oklch(0% 0 0 / 0.08)",
+      "color": "oklch(0% 0 0 / 0.74)",
+      "tag": [">", "flow:"]
+    },
+    {
+      "backgroundColor": "oklch(60% 0.2 138 / 0.08)",
+      "color": "oklch(60% 0.2 138)",
+      "tag": "note:"
+    },
+    { "color": "oklch(64% 0.11 183)", "tag": ["?", "fyi:"] },
+    { "color": "oklch(60% 0.25 32)", "tag": ["!", "urgent:", "fixme:"] },
+    { "color": "oklch(71% 0.18 58)", "tag": ["todo:", "extissue:", "hack:", "deprecated:"] }
+  ],
+  "black-formatter.args": ["--config", "pyproject.toml"],
+  "black-formatter.importStrategy": "fromEnvironment",
+  "C_Cpp.intelliSenseEngine": "disabled",
+  "editor.codeActionsOnSave": { "source.organizeImports": "explicit" },
+  "editor.defaultFormatter": "esbenp.prettier-vscode",
+  "editor.formatOnSave": true,
+  "editor.indentSize": "tabSize",
+  "editor.insertSpaces": true,
+  "editor.renderControlCharacters": true,
+  "editor.tabSize": 2,
+  "editor.trimAutoWhitespace": true,
+  "emeraldwalk.runonsave": {
+    "commands": [
+      {
+        "match": "daisy\\/models\\/.*cfgs\\.py",
+        "cmd": "task schemas:daisy_cfgs",
+        "silent": true
+      },
+      {
+        "match": "daisy\\/dev\\/train\\/.*cfgs\\.py",
+        "cmd": "task schemas:train_cfgs",
+        "silent": true
+      },
+      {
+        "match": "daisy\\/dev\\/pack\\/pack_cfgs\\.py",
+        "cmd": "task schemas:pack_cfgs",
+        "silent": true
+      },
+      {
+        "match": "daisy\\/backend\\/.*_cfgs\\.py",
+        "cmd": "task schemas:pack_cfgs",
+        "silent": true
+      },
+      {
+        "match": "daisy\\/backend\\/.*_opts\\.py",
+        "cmd": "task schemas:pack_cfgs",
+        "silent": true
+      },
+      {
+        "match": "daisy\\/dev\\/prep\\/utt_scan.*cfgs\\.py",
+        "cmd": "task schemas:utt_scan_cfgs",
+        "silent": true
+      },
+      {
+        "match": "daisy\\/dev\\/prep\\/dump_keys_cfgs\\.py",
+        "cmd": "task schemas:dump_keys_cfgs",
+        "silent": true
+      }
+    ]
+  },
+  "evenBetterToml.formatter.columnWidth": 100,
+  "evenBetterToml.formatter.crlf": false,
+  "evenBetterToml.formatter.trailingNewline": true,
+  "files.encoding": "utf8",
+  "files.eol": "\n",
+  "files.exclude": {
+    "**/.venv": false,
+    "**/.pytest_cache": true
+  },
+  "files.readonlyInclude": {
+    "uv.lock": true,
+    "**/*.schema.json": true,
+    ".clangd": true
+  },
+  "files.insertFinalNewline": true,
+  "files.trimFinalNewlines": true,
+  "files.trimTrailingWhitespace": true,
+  "prettier.printWidth": 100,
+  "prettier.singleAttributePerLine": false,
+  "python.analysis.autoImportCompletions": true,
+  "python.analysis.diagnosticMode": "openFilesOnly",
+  "python.defaultInterpreterPath": "./.venv/bin/python",
+  "python.languageServer": "Pylance",
+  "shellformat.flag": "-ln bash -i 2",
+  "yaml.format.printWidth": 100,
+  "yaml.schemas": {
+    "./schemas/daisy_cfgs.schema.json": "daisy_*.yaml",
+    "./schemas/train_cfgs.schema.json": "train_*.yaml",
+    "./schemas/pack_cfgs.schema.json": "pack_*.yaml",
+    "./schemas/utt_scan_cfgs.schema.json": "utt_scan_*.yaml",
+    "./schemas/dump_keys_cfgs.schema.json": "dump_keys_*.yaml",
+    "https://taskfile.dev/schema.json": ["Taskfile.yaml", "*.taskfile.yaml"]
+  },
+  "[cuda-cpp]": {
+    "editor.defaultFormatter": "llvm-vs-code-extensions.vscode-clangd",
+    "editor.formatOnSave": true
+  },
+  "[dockercompose]": { "editor.defaultFormatter": "redhat.vscode-yaml" },
+  "[ignore]": { "editor.defaultFormatter": "foxundermoon.shell-format" },
+  "[json]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[jsonc]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[markdown]": { "editor.defaultFormatter": "esbenp.prettier-vscode" },
+  "[properties]": { "editor.defaultFormatter": "foxundermoon.shell-format" },
+  "[python]": {
+    "editor.defaultFormatter": "ms-python.black-formatter",
+    "editor.rulers": [100],
+    "editor.tabSize": 4
+  },
+  "[shellscript]": { "editor.defaultFormatter": "foxundermoon.shell-format" },
+  "[toml]": { "editor.defaultFormatter": "tamasfe.even-better-toml" },
+  "[yaml]": { "editor.defaultFormatter": "redhat.vscode-yaml" }
+}
