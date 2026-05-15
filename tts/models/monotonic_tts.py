@@ -38,11 +38,9 @@ class SynthesizerForwardOutput(NamedTuple):
     norm_log_z: torch.Tensor
 
     # pairwise CRF scores
-    raw_emission: torch.Tensor
-    masked_raw_emission: torch.Tensor
+    raw_unary: torch.Tensor
+    masked_raw_unary: torch.Tensor
     log_b: torch.Tensor
-    log_a_stay: torch.Tensor
-    log_a_adv: torch.Tensor
 
     viterbi_path: torch.Tensor | None
     viterbi_logp: torch.Tensor | None
@@ -87,11 +85,9 @@ class AlignedFeaturesOutput(NamedTuple):
     raw_log_z: torch.Tensor | None = None
     norm_log_z: torch.Tensor | None = None
 
-    raw_evidence: torch.Tensor | None = None
-    masked_raw_evidence: torch.Tensor | None = None
+    raw_unary: torch.Tensor | None = None
+    masked_raw_unary: torch.Tensor | None = None
     log_b: torch.Tensor | None = None
-    log_a_stay: torch.Tensor | None = None
-    log_a_adv: torch.Tensor | None = None
 
     viterbi_path: torch.Tensor | None = None
     viterbi_logp: torch.Tensor | None = None
@@ -191,11 +187,9 @@ class MonotonicTTSSynthesizer(BaseModel):
         assert out.raw_log_z is not None
         assert out.norm_log_z is not None
 
-        assert out.raw_evidence is not None
-        assert out.masked_raw_evidence is not None
+        assert out.raw_unary is not None
+        assert out.masked_raw_unary is not None
         assert out.log_b is not None
-        assert out.log_a_stay is not None
-        assert out.log_a_adv is not None
 
         # ---------------------------
         # 3. Text-aligned reconstruction loss
@@ -280,11 +274,9 @@ class MonotonicTTSSynthesizer(BaseModel):
             log_gamma=out.log_gamma,
             raw_log_z=out.raw_log_z,
             norm_log_z=out.norm_log_z,
-            raw_emission=out.raw_evidence,
-            masked_raw_emission=out.masked_raw_evidence,
+            raw_unary=out.raw_unary,
+            masked_raw_unary=out.masked_raw_unary,
             log_b=out.log_b,
-            log_a_stay=out.log_a_stay,
-            log_a_adv=out.log_a_adv,
             viterbi_path=out.viterbi_path,
             viterbi_logp=out.viterbi_logp,
             mel_recon=mel_recon,
@@ -373,8 +365,7 @@ class MonotonicTTSSynthesizer(BaseModel):
         text_mask_bool = text_mask.bool()
 
         log_alpha = log_beta = log_gamma = raw_log_z = norm_log_z = None
-        raw_emmision = masked_raw_emission = None
-        log_b = log_a_stay = log_a_adv = None
+        raw_unary = masked_raw_unary = log_b = None
         viterbi_path = viterbi_logp = None
         soft_gamma = hard_attn = hard_dur = None
 
@@ -403,11 +394,9 @@ class MonotonicTTSSynthesizer(BaseModel):
                     log_gamma,
                     raw_log_z,
                     norm_log_z,
-                    raw_emmision,
-                    masked_raw_emission,
+                    raw_unary,
+                    masked_raw_unary,
                     log_b,
-                    log_a_stay,
-                    log_a_adv,
                     soft_dur,
                     hard_attn,
                     hard_dur,
@@ -429,11 +418,9 @@ class MonotonicTTSSynthesizer(BaseModel):
                     log_gamma,
                     raw_log_z,
                     norm_log_z,
-                    raw_emmision,
-                    masked_raw_emission,
+                    raw_unary,
+                    masked_raw_unary,
                     log_b,
-                    log_a_stay,
-                    log_a_adv,
                     soft_dur,
                 ) = self.crf_aligner(
                     h_spec=h_spec,
@@ -543,11 +530,9 @@ class MonotonicTTSSynthesizer(BaseModel):
             log_gamma=log_gamma,
             raw_log_z=raw_log_z,
             norm_log_z=norm_log_z,
-            raw_evidence=raw_emmision,
-            masked_raw_evidence=masked_raw_emission,
+            raw_unary=raw_unary,
+            masked_raw_unary=masked_raw_unary,
             log_b=log_b,
-            log_a_stay=log_a_stay,
-            log_a_adv=log_a_adv,
             viterbi_path=viterbi_path,
             viterbi_logp=viterbi_logp,
         )

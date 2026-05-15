@@ -25,8 +25,8 @@ class AudioConfig:
 @dataclass(frozen=True)
 class DatasetConfigs:
     # List of datasets to load: "ljspeech", "vctk", "libritts"
-    # dataset_list: list[str] = field(default_factory=lambda: ["libritts"])
-    dataset_list: list[str] = field(default_factory=lambda: ["vctk"])
+    dataset_list: list[str] = field(default_factory=lambda: ["libritts"])
+    # dataset_list: list[str] = field(default_factory=lambda: ["vctk"])
 
     # Root directories for each dataset type (preprocessed)
     ljspeech_root: str = os.path.join(DATA_PARENT_DIR, "LJSpeech-1.1-preprocessed")
@@ -65,7 +65,7 @@ class TrainConfigs:
 
     # --- Hardware & Dataloader ---
     seed: int = 1234
-    batch_size: int = 12
+    batch_size: int = 8
     val_batch_size: int = 8
     grad_accumulation_steps: int = 1
     num_workers: int = 8
@@ -96,22 +96,22 @@ class TrainConfigs:
 @dataclass(frozen=True)
 class LossConfigs:
     # Spec Decoder Loss Scheduling
-    mel_recon_initial_weight: float = 15.0
-    mel_recon_final_weight: float = 15.0
+    mel_recon_initial_weight: float = 25.0
+    mel_recon_final_weight: float = 25.0
     mel_recon_start_step: int = 0
     mel_recon_end_step: int = 100000
 
     # Alignment NLL Loss Scheduling
     align_forward_initial_weight: float = 1.0
-    align_forward_final_weight: float = 2.0
+    align_forward_final_weight: float = 1.0
     align_forward_start_step: int = 2500
     align_forward_end_step: int = 5000
 
     # Alignment Diagonal Loss Scheduling
-    align_diag_initial_weight: float = 2.0
+    align_diag_initial_weight: float = 5.0
     align_diag_final_weight: float = 0.0
-    align_diag_start_step: int = 10000
-    align_diag_end_step: int = 15000
+    align_diag_start_step: int = 5000
+    align_diag_end_step: int = 0
 
     # Alignment Viterbi KL Loss Scheduling
     align_viterbi_kl_initial_weight: float = 0.0

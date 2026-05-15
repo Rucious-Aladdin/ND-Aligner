@@ -25,7 +25,7 @@ class SpecEncoderConfigs:
     cond_dim: int = SPK_COND_DIM
 
     # architectures
-    kernel_size: int = 3
+    kernel_size: int = 1
     dropout_p: float = 0.1
     dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 1, 1])
 
@@ -55,18 +55,20 @@ class DurationPredictorConfigs:
 
 
 @dataclass(frozen=True)
-class AlignerConfigs:
+class CRFAlignerConfigs:
     # dimensions
     dim_spec: int = SPEC_DIM
     dim_text: int = TEXT_DIM
-    dim_hidden: int = 32
     dim_cond: int = SPK_COND_DIM
-    dim_emit_latent: int = 48
-    cond_channels: int = 32
+    dim_unary_latent: int = 32
+    cond_channels: int = 16
+    unet_base_dim: int = 8
+    unet_groups: int = 8
 
-    emission_radius: int = 10
-    emission_temperature: float = 1.0
-    evidence_scale_init: float = -2.0
+    unary_support_type: str = "global"  # "local" or "global"
+    unary_radius: int = 10
+    unary_temperature: float = 1.0
+    unary_scale_init: float = -2.0
 
 
 @dataclass(frozen=True)
@@ -81,5 +83,5 @@ class MonotonicTTSConfigs:
     spec_enc: SpecEncoderConfigs = field(default_factory=SpecEncoderConfigs)
     spec_dec: SpecDecoderConfigs = field(default_factory=SpecDecoderConfigs)
     dur_predictor: DurationPredictorConfigs = field(default_factory=DurationPredictorConfigs)
-    aligner: AlignerConfigs = field(default_factory=AlignerConfigs)
+    aligner: CRFAlignerConfigs = field(default_factory=CRFAlignerConfigs)
     vocoder: HifiGANVocoderConfigs = field(default_factory=HifiGANVocoderConfigs)

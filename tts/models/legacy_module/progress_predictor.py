@@ -136,6 +136,21 @@ class ContentProgressPredictor(nn.Module):
             kernel_size=1,
         )
 
+        # (B, h_progress, T_spec, T_text) -> (B, 1, T_spec, T_text)
+        self.progress_out_proj = nn.Sequential(
+            nn.Conv2d(
+                in_channels=h_progress,
+                out_channels=h_progress,
+                kernel_size=3,
+            ),
+            nn.GELU(),
+            nn.Conv2d(
+                in_channels=h_progress,
+                out_channels=1,
+                kernel_size=3,
+            ),
+        )
+
     @override
     def forward(
         self,
@@ -268,6 +283,10 @@ class ContentProgressPredictor(nn.Module):
 
         # Mask after projection so invalid cells have a fixed value
         # regardless of Conv2d bias/weights.
+        progress_matrix = progress_diff.unsqueeze(1)  # (B, 1, T_spec, T_text)
+        progress_hidden = self.progress_proj(progress_matrix)
+        progress_matrix = self.progress_out_proj(progress_hidden)
+
         progress_matrix = progress_matrix.masked_fill(
             ~valid.unsqueeze(1),
             pad_value,

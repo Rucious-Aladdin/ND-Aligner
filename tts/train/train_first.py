@@ -152,9 +152,7 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
                 # "spec_encoder": self.model.spec_encoder,
             }
 
-            params_to_freeze: dict[str, torch.nn.Parameter | None] = {
-                "aligner.kappa_adv": self.model.crf_aligner.kappa_adv,
-            }
+            params_to_freeze: dict[str, torch.nn.Parameter | None] = {}
 
             # Check one representative parameter to avoid printing every step.
             first_param: torch.nn.Parameter | None = None
@@ -439,16 +437,16 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
         # ------------------------------------------------------------------
         # Emission score maps
         # ------------------------------------------------------------------
-        masked_raw_evidence = out.masked_raw_emission[0, :s_len, :t_len].detach()
+        masked_raw_unary = out.masked_raw_unary[0, :s_len, :t_len].detach()
 
-        plot_raw_evidence = prepare_masked_score_for_plot(
-            masked_raw_evidence,
+        plot_raw_unary = prepare_masked_score_for_plot(
+            masked_raw_unary,
             fill_mode="min",  # or "p05", "mean"
         )
 
         self.logger.log_figure(
-            f"{prefix}/Log_Emission_Raw",
-            plot_alignment(plot_raw_evidence, tokens=tokens),
+            f"{prefix}/Log_Unary_Raw",
+            plot_alignment(plot_raw_unary, tokens=tokens),
             step,
         )
         # ------------------------------------------------------------------
