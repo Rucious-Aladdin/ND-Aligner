@@ -33,3 +33,8 @@ class DiffusionTTSConfigs:
     # Unet Downsampling aware (seq_len % (2^num_downsample) == 0)
     num_unet_downsample: int = 2
     unet_out_size: int = field(default_factory=partial(fix_len_compatibility, 2 * 22050 // 256, 2))
+
+    apply_local_text_progress: bool = True
+    apply_global_text_progress: bool = True
+    apply_spec_progress: bool = True
+    progress_hidden_dim: int = 128

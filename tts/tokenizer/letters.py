@@ -1,12 +1,10 @@
-PAD = "$"
 EOS = "~"
 BOS = "^"
 PUNCTUATION = ';:,.!?¡¿—…"«»“” '
 LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz"
 LETTERS_IPA = "ɑɐɒæɓʙβɔɕçɗɖðʤəɘɚɛɜɝɞɟʄɡɠɢʛɦɧħɥʜɨɪʝɭɬɫɮʟɱɯɰŋɳɲɴøɵɸθœɶʘɹɺɾɻʀʁʁɽʂʃʈʧʉʊʋⱱʌɣɤʍχʎʏʑʐʒʔʡʕʢǀǁǂǃˈˌːˑʼʴʰʱʲʷˠˤ˞↓↑→↗↘'̩'ᵻ"
 
-SYMBOLS = [PAD, EOS, BOS] + list(PUNCTUATION) + list(LETTERS) + list(LETTERS_IPA)
-
+SYMBOLS = [EOS, BOS] + list(PUNCTUATION) + list(LETTERS) + list(LETTERS_IPA)
 
 SYMBOL_DICTS = {}
 for i in range(len((SYMBOLS))):

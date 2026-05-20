@@ -25,7 +25,7 @@ class SpecEncoderConfigs:
     cond_dim: int = SPK_COND_DIM
 
     # architectures
-    kernel_size: int = 1
+    kernel_size: int = 3
     dropout_p: float = 0.1
     dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 1, 1])
 
@@ -60,9 +60,9 @@ class CRFAlignerConfigs:
     dim_spec: int = SPEC_DIM
     dim_text: int = TEXT_DIM
     dim_cond: int = SPK_COND_DIM
-    dim_unary_latent: int = 32
-    cond_channels: int = 16
-    unet_base_dim: int = 8
+    dim_unary_latent: int = 48
+    cond_channels: int = 32
+    unet_base_dim: int = 16
     unet_groups: int = 8
 
     unary_support_type: str = "global"  # "local" or "global"

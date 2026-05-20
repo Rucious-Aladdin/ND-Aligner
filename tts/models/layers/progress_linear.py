@@ -34,22 +34,58 @@ class ProgressLinear(nn.Module):
     def forward(
         self,
         x: torch.Tensor,
-    ):
+        mask: torch.Tensor,
+    ) -> torch.Tensor:
         B, C, T = x.shape  # pyright: ignore
         device = x.device
 
+        if mask.dim() == 2:
+            mask = mask.unsqueeze(1)
+
         x = self.input_proj(x)
+        lengths = mask.sum(dim=-1).squeeze(1)  # (B,)
 
-        t_idx = torch.arange(T, device=device).float()
-        if T > 1:
-            progress = (t_idx / (T - 1)).view(1, T, 1)  # (1, T, 1)
-        else:
-            progress = torch.zeros(1, T, 1, device=device)
+        t_idx = torch.arange(T, device=device).float().unsqueeze(0)  # (1, T)
 
-        pos_emb = self.pos_proj(progress).transpose(1, 2)  # (1, hidden_dim, T)
-        pos_emb = pos_emb.expand(B, -1, -1)
+        max_lens = torch.clamp(lengths - 1, min=1.0).unsqueeze(1)  # (B, 1)
+        progress = t_idx / max_lens  # (B, T)
 
-        # Concat and MLP
+        progress = progress * mask.squeeze(1)  # (B, T)
+        progress = progress.unsqueeze(-1)  # (B, T, 1)
+
+        pos_emb = self.pos_proj(progress).transpose(1, 2)  # (B, hidden_dim, T)
+
         out = torch.cat([x, pos_emb], dim=1)
         out = self.pos_mlp(out)
-        return out
+
+        return out * mask
+
+    def forward_sawtooth(
+        self,
+        x: torch.Tensor,  # (B, C_text, T_mel) - aligned_feats
+        mask: torch.Tensor,  # (B, 1, T_mel) - spec_mask
+        hard_gamma: torch.Tensor,  # (B, T_mel, T_text) - Viterbi hard alignment
+    ) -> torch.Tensor:
+        if mask.dim() == 2:
+            mask = mask.unsqueeze(1)
+
+        x = self.input_proj(x)
+
+        cumsum_gamma = torch.cumsum(hard_gamma, dim=1)  # (B, T_mel, T_text)
+        current_idx = torch.sum(cumsum_gamma * hard_gamma, dim=-1)  # (B, T_mel)
+
+        hard_dur = hard_gamma.sum(dim=1, keepdim=True)  # (B, 1, T_text)
+
+        dur_per_frame = torch.sum(hard_dur * hard_gamma, dim=-1)  # (B, T_mel)
+
+        max_lens = torch.clamp(dur_per_frame, min=1.0)
+        progress = current_idx / max_lens  # (B, T_mel)
+
+        progress = progress * mask.squeeze(1)  # (B, T_mel)
+        progress = progress.unsqueeze(-1)  # (B, T_mel, 1)
+
+        pos_emb = self.pos_proj(progress).transpose(1, 2)  # (B, hidden_dim, T_mel)
+        out = torch.cat([x, pos_emb], dim=1)
+        out = self.pos_mlp(out)
+
+        return out * mask

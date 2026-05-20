@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from typing import Any, NamedTuple, override
+from typing import Any, NamedTuple, override, cast
 
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 
 from .base_model import BaseModel
@@ -10,6 +11,8 @@ from .diffusion.sampler import KarrasSampler
 from .diffusion.score_estimator import KarrasScoreEstimator
 from .monotonic_tts import MonotonicTTSSynthesizer, SynthesizerInferenceOutput
 from .utils.fix_len_compatibility import fix_len_compatibility
+from tts.models.utils.sequence_mask import sequence_mask
+from tts.models.layers.progress_linear import ProgressLinear
 
 
 class DiffusionForwardOutput(NamedTuple):
@@ -34,6 +37,10 @@ class KarrasTTSSynthesizer(BaseModel):
         stochastic_sampling: bool = True,
         num_unet_downsample: int = 2,
         unet_out_size: int = 172,
+        apply_local_text_progress: bool = False,
+        apply_global_text_progress: bool = False,
+        apply_spec_progress: bool = False,
+        progress_hidden_dim: int = 192,
     ) -> None:
         super().__init__()
         self.syn_backbone = syn
@@ -41,6 +48,54 @@ class KarrasTTSSynthesizer(BaseModel):
         self.stochastic_sampling = stochastic_sampling
         self.num_unet_downsample = num_unet_downsample
         self.unet_out_size = unet_out_size
+
+        # Applying Progress Conditioning-Aware
+        text_dim = syn.text_embedder.hidden_channels
+        self.progress_cond_dim = progress_hidden_dim
+
+        self.local_text_progress_layer = None
+        self.global_text_progress_layer = None
+        self.spec_progress_layer = None
+        self.progress_cond_dim = 0
+
+        num_layers = 0
+        if apply_global_text_progress:
+            self.global_text_progress_layer = ProgressLinear(
+                in_dim=text_dim,
+                out_dim=progress_hidden_dim,
+            )
+            num_layers += 1
+
+        if apply_local_text_progress:
+            self.local_text_progress_layer = ProgressLinear(
+                in_dim=text_dim,
+                out_dim=progress_hidden_dim,
+            )
+            num_layers += 1
+
+        if apply_spec_progress:
+            self.spec_progress_layer = ProgressLinear(
+                in_dim=text_dim,
+                out_dim=progress_hidden_dim,
+            )
+            num_layers += 1
+
+        self.progress_mlp = None
+        if num_layers > 0:
+            self.progress_cond_dim = progress_hidden_dim
+            self.progress_mlp = nn.Sequential(
+                nn.Conv1d(
+                    in_channels=progress_hidden_dim,
+                    out_channels=progress_hidden_dim * 2,
+                    kernel_size=1,
+                ),
+                nn.GELU(),
+                nn.Conv1d(
+                    in_channels=progress_hidden_dim * 2,
+                    out_channels=text_dim,
+                    kernel_size=1,
+                ),
+            )
 
         self.sampler = KarrasSampler(estimator)
 
@@ -62,16 +117,38 @@ class KarrasTTSSynthesizer(BaseModel):
         Stage 1 weights are assumed to be fixed (or detached).
         Loss weighting is delegated to the training script.
         """
+
+        _, _, T_mel = y.shape
+
+        text_mask_bool = sequence_mask(x_lengths, x.size(1))
+        text_mask = text_mask_bool.unsqueeze(1).to(dtype=y.dtype)
+
+        idx = torch.arange(T_mel, device=y.device).unsqueeze(0)
+        spec_mask = (idx < y_lengths.unsqueeze(1)).to(dtype=y.dtype)
+
         # 1. Get Aligned Features from Stage 1 (detached)
         with torch.no_grad():
-            out = self.syn_backbone.compute_aligned_feats(
-                x=x,
-                x_lengths=x_lengths,
-                cond=cond,
+            h_text = cast(
+                torch.Tensor,
+                self.syn_backbone.text_embedder(
+                    text_token_ids=x,
+                    text_mask=text_mask,
+                ),
+            )  # (B, C_text, T_text)
+
+            h_spec = self.syn_backbone._encode_speech(  # type: ignore
                 y=y,
-                y_lengths=y_lengths,
-                to_hard_aligened_feats=True,
-                text_only_aligned_feats=True,
+                spec_mask=spec_mask,
+                cond=cond,
+            )  # (B, C_spec, T_mel)
+
+            out = self.syn_backbone.compute_aligned_feats(
+                h_text=h_text,
+                text_mask=text_mask,
+                cond=cond,
+                h_spec=h_spec,
+                spec_mask=spec_mask,
+                compute_hard_path=True,
             )
 
             # aligned_feats: (B, T_mel, C) -> (B, C, T_mel)
@@ -80,12 +157,17 @@ class KarrasTTSSynthesizer(BaseModel):
             # spec_mask: (B, T_mel) -> (B, 1, T_mel)
             mask = out.spec_mask.unsqueeze(1)
 
-            # y: (B, n_mels, T_mel)
-            y_gt = out.y
-            assert y_gt is not None
+        assert out.hard_gamma is not None
+        aligned_feats = self._make_progress_conditioning(
+            h_text=h_text.detach(),
+            text_mask=text_mask.detach(),
+            aligned_feats=aligned_feats.detach(),
+            spec_mask=mask.detach(),
+            hard_gamma=out.hard_gamma.detach(),
+        )
 
         y_gt, aligned_feats, mask = self._get_random_segments(
-            y_gt=y_gt,
+            y_gt=y,
             mask=mask,
             aligned_feats=aligned_feats,
         )
@@ -99,7 +181,7 @@ class KarrasTTSSynthesizer(BaseModel):
         # >> Predict Denoised Mel
         # Note: loss_weight calculation is delegated to the training script
 
-        denoised = self.estimator.reverse_diffusion(
+        x0_hat = self.estimator.reverse_diffusion(
             x=y_noisy,
             sigma=sigma,
             mask=mask,
@@ -114,10 +196,10 @@ class KarrasTTSSynthesizer(BaseModel):
 
         # Calculate unweighted squared error (just before loss_weight)
         # Apply mask to ensure padding doesn't contribute to loss
-        mel_loss_unweighted = ((denoised - y_gt) ** 2) * mask
+        mel_loss_unweighted = ((x0_hat - y_gt) ** 2) * mask
 
         return DiffusionForwardOutput(
-            mel_hat=denoised,
+            mel_hat=x0_hat,
             mel_gt=y_gt,
             sigma=sigma,
             mask=mask,
@@ -125,7 +207,7 @@ class KarrasTTSSynthesizer(BaseModel):
         )
 
     @override
-    @torch.no_grad()
+    @torch.inference_mode()
     def inference(
         self,
         x: torch.Tensor,
@@ -141,20 +223,37 @@ class KarrasTTSSynthesizer(BaseModel):
         Full TTS Inference: Stage 1 Alignment -> Stage 2 Diffusion Refinement -> Vocoding.
         """
         # 1. Stage 1 Inference (Predict Duration & Alignment)
+        text_mask_bool = sequence_mask(x_lengths, x.size(1))
+        text_mask = text_mask_bool.unsqueeze(1).to(dtype=x.dtype)
+
+        # 1. Get Aligned Features from Stage 1 (detached)
+        h_text = self.syn_backbone.text_embedder(
+            text_token_ids=x,
+            text_mask=text_mask,
+        )  # (B, C_text, T_text)
+
         out = self.syn_backbone.compute_aligned_feats(
-            x,
-            x_lengths,
-            cond,
+            h_text=h_text,
+            text_mask=text_mask,
+            cond=cond,
             noise_scale=noise_scale,
-            text_only_aligned_feats=True,
+            compute_hard_path=True,
         )
-        assert out.hard_attn is not None
+        assert out.hard_gamma is not None
 
         # aligned_feats: (B, T_mel, C) -> (B, C, T_mel)
         aligned_feats = out.aligned_feats.transpose(1, 2)
 
         # spec_mask: (B, T_mel) -> (B, 1, T_mel)
         mask = out.spec_mask.unsqueeze(1)
+
+        aligned_feats = self._make_progress_conditioning(
+            h_text=h_text,
+            text_mask=text_mask,
+            aligned_feats=aligned_feats,
+            spec_mask=mask,
+            hard_gamma=out.hard_gamma,
+        )
 
         aligned_feats, mask, _ = self._pad_length_compatible(
             aligned_feats=aligned_feats,
@@ -178,7 +277,7 @@ class KarrasTTSSynthesizer(BaseModel):
 
         return SynthesizerInferenceOutput(
             dur=out.dur,
-            attn=out.hard_attn,
+            attn=out.hard_gamma,
             mel_hat=refined_mel.transpose(1, 2),  # (B, T_mel, n_mels)
             wav_hat=wav_hat,
         )
@@ -209,6 +308,49 @@ class KarrasTTSSynthesizer(BaseModel):
             noise_scale=noise_scale,
             **sampler_kwargs,
         )
+
+    def set_sample_mode(self, stochastic: bool = True):
+        self.stochastic_sampling = stochastic
+
+    def _make_progress_conditioning(
+        self,
+        h_text: torch.Tensor,  # (B, C_text, T_text)
+        aligned_feats: torch.Tensor,  # (B, C_text, T_mel)
+        hard_gamma: torch.Tensor,  # (B, T_mel, T_text) - Viterbi hard alignment
+        text_mask: torch.Tensor,  # (B, 1, T_text)
+        spec_mask: torch.Tensor,  # (B, 1, T_mel)
+    ) -> torch.Tensor:
+        if self.progress_mlp is None:
+            return aligned_feats  # No progress conditioning applied
+
+        B, _, T_mel = aligned_feats.shape
+        device = aligned_feats.device
+
+        accumulated = torch.zeros(
+            B, self.progress_cond_dim, T_mel, device=device, dtype=aligned_feats.dtype
+        )
+
+        # 2. Global Text Progress
+        if self.global_text_progress_layer is not None:
+            global_prog = self.global_text_progress_layer(h_text, text_mask)
+            global_prog_mel = torch.bmm(global_prog, hard_gamma.transpose(1, 2))
+            accumulated = accumulated + global_prog_mel
+
+        if self.local_text_progress_layer is not None:
+            local_prog_mel = self.local_text_progress_layer.forward_sawtooth(
+                x=aligned_feats,
+                mask=spec_mask,
+                hard_gamma=hard_gamma,
+            )
+            accumulated = accumulated + local_prog_mel
+
+        if self.spec_progress_layer is not None:
+            spec_prog_mel = self.spec_progress_layer(aligned_feats, spec_mask)
+            accumulated = accumulated + spec_prog_mel
+
+        aligned_feats = aligned_feats + self.progress_mlp(accumulated)
+
+        return aligned_feats
 
     def _get_random_segments(
         self,

@@ -29,6 +29,17 @@ class KarrasScoreEstimator(nn.Module):
         self.p_mean = p_mean
         self.p_std = p_std
 
+    @override
+    def forward(
+        self,
+        *args: Any,
+        **kwargs: dict[str, Any],
+    ) -> torch.Tensor:
+        """
+        Default forward pass delegates to reverse_diffusion.
+        """
+        return self.reverse_diffusion(*args, **kwargs)
+
     def get_coefficients(
         self, sigma: torch.Tensor
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -136,14 +147,3 @@ class KarrasScoreEstimator(nn.Module):
 
         denoised_centered = c_skip * x_centered + c_out * f_theta
         return denoised_centered + self.mu_data
-
-    @override
-    def forward(
-        self,
-        *args: Any,
-        **kwargs: dict[str, Any],
-    ) -> torch.Tensor:
-        """
-        Default forward pass delegates to reverse_diffusion.
-        """
-        return self.reverse_diffusion(*args, **kwargs)

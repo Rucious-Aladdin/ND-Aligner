@@ -8,9 +8,8 @@ from ..stage1.data_config import AudioConfig, DatasetConfigs
 class DiffusionTrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    # run_name: str = "diffusion_tts_kl_1e-2"
-    # run_name: str = "diffusion_tts_kl_1e-3"
-    run_name: str = "debug_test"
+    run_name: str = "karras_vctk+progress"
+    # run_name: str = "karras_libritts+progress"
 
     continue_path: str = ""
     continue_dir: str = ""
@@ -19,12 +18,8 @@ class DiffusionTrainConfigs:
 
     # --- Stage 1 Model Loading ---
     # Path to the frozen stage 1 checkpoint (REQUIRED for Stage 2 training)
-    # stage1_ckpt_path: str = (
-    #     "./runs/monotonic_tts_k=1_d=1+text_kl_20260417-072647/checkpoints/ckpt_step_445000.pth"
-    # )
-    stage1_ckpt_path: str = (
-        "./runs/monotonic_tts_k=1_d=1+text_kl_20260417-072748/checkpoints/ckpt_step_452000.pth"
-    )
+    # stage1_ckpt_path: str = "./checkpoints/unet_unary_checkpoints/ckpt_step_235000_libritts.pth"
+    stage1_ckpt_path: str = "./checkpoints/unet_unary_checkpoints/ckpt_step_524000_vctk.pth"
 
     # --- Intervals ---
     val_sanity_check: bool = True

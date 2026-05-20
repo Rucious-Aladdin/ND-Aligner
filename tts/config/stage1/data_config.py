@@ -25,8 +25,8 @@ class AudioConfig:
 @dataclass(frozen=True)
 class DatasetConfigs:
     # List of datasets to load: "ljspeech", "vctk", "libritts"
-    dataset_list: list[str] = field(default_factory=lambda: ["libritts"])
-    # dataset_list: list[str] = field(default_factory=lambda: ["vctk"])
+    # dataset_list: list[str] = field(default_factory=lambda: ["libritts"])
+    dataset_list: list[str] = field(default_factory=lambda: ["vctk"])
 
     # Root directories for each dataset type (preprocessed)
     ljspeech_root: str = os.path.join(DATA_PARENT_DIR, "LJSpeech-1.1-preprocessed")

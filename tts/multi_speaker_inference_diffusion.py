@@ -58,15 +58,21 @@ def parse_args():
         help="number of diffusion steps",
     )
     parser.add_argument(
-        "--guidance_scale",
+        "--text_guidance_scale",
+        type=float,
+        default=2.0,
+        help="cfg text guidance scale (higher values yields more deterministic adherence to text but can reduce diversity)",
+    )
+    parser.add_argument(
+        "--spk_guidance_scale",
         type=float,
         default=1.5,
-        help="classifier-free guidance scale",
+        help="cfg speaker guidance scale (higher values yields stronger adherence to reference speaker but can reduce diversity)",
     )
     parser.add_argument(
         "--noise_scale",
         type=float,
-        default=0.667,
+        default=0.0,
         help="noise scale for stochastic duration predictor",
     )
     parser.add_argument(
@@ -74,6 +80,11 @@ def parse_args():
         type=str,
         default="cuda" if torch.cuda.is_available() else "cpu",
         help="device to use",
+    )
+    parser.add_argument(
+        "--sample_deterministic",
+        action="store_true",
+        help="use deterministic sampling (no random noise) during the sampling procedure. it could help to improve audio quality but may reduce diversity.",
     )
 
     return parser.parse_args()
@@ -93,6 +104,8 @@ def main(args: Any):
     if args.data_config_path:
         print(f"📖 Loading data config from: {args.data_config_path}")
         data_config = load_config(args.data_config_path, DataConfig)
+        print(data_config)
+
     else:
         data_config = DataConfig()
 
@@ -122,16 +135,16 @@ def main(args: Any):
 
     # 6. Inference
     print("🚀 Synthesizing...")
+    model.set_sample_mode(stochastic=not args.sample_deterministic)
     with torch.no_grad():
         output = model.inference_from_ref_audio(
             x=x,
             x_lengths=x_lengths,
             ref_waveform=ref_wav_tensor,
             n_steps=args.n_steps,
-            # guidance_scale=args.guidance_scale,
             noise_scale=args.noise_scale,
             cfg_mode="sequential",
-            guidance_scale=(0.0, 3.5),
+            guidance_scale=(args.text_guidance_scale, args.spk_guidance_scale),
         )
 
     # 7. Save Output

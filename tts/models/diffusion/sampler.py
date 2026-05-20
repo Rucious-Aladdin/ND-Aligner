@@ -55,14 +55,14 @@ class KarrasSampler(nn.Module):
         Main entry point for sampling.
 
         Args:
-            mu: Conditioning tensor (aligned_feats).
+            text: Conditioning tensor (aligned_feats).
             mask: Mel mask.
             spk: Speaker embedding.
             n_steps: Number of sampling steps.
             sigma_min: Minimum noise level.
             sigma_max: Maximum noise level.
             rho: Polynomial schedule exponent.
-            guidance_scale: Classifier-free guidance scale (float or tuple).
+            guidance_scale: Classifier-free guidance scale (text_cond_strength, speaker_cond_strength) or float.
             cfg_mode: CFG strategy ('base', 'independent', 'sequential').
             stochastic: Whether to use stochastic sampling (Algorithm 2).
             **kwargs: Extra parameters for stochastic sampling (s_churn, s_tmin, s_tmax, s_noise).
@@ -110,7 +110,8 @@ class KarrasSampler(nn.Module):
 
         # 1. Initialize x_0 ~ N(mu_data, sigma_max^2 * I)
         x = (
-            torch.randn([B, self.estimator.denoiser.n_mels, T], device=device) * sigma_max
+            torch.randn([B, self.estimator.denoiser.n_mels, T], device=device)  # type: ignore
+            * sigma_max
             + self.estimator.mu_data
         )
         sigmas = self.get_sigmas(n_steps, sigma_min, sigma_max, rho, device)
@@ -156,7 +157,8 @@ class KarrasSampler(nn.Module):
         device = text.device
 
         x = (
-            torch.randn([B, self.estimator.denoiser.n_mels, T], device=device) * sigma_max
+            torch.randn([B, self.estimator.denoiser.n_mels, T], device=device)  # type: ignore
+            * sigma_max
             + self.estimator.mu_data
         )
         sigmas = self.get_sigmas(n_steps, sigma_min, sigma_max, rho, device)

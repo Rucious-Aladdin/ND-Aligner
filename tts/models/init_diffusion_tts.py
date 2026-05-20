@@ -56,6 +56,9 @@ def init_diffusion_tts(
         estimator=estimator,
         num_unet_downsample=config.num_unet_downsample,
         unet_out_size=config.unet_out_size,
+        apply_global_text_progress=config.apply_global_text_progress,
+        apply_local_text_progress=config.apply_local_text_progress,
+        apply_spec_progress=config.apply_spec_progress,
+        progress_hidden_dim=config.progress_hidden_dim,
     )
-
     return model.to(device)
