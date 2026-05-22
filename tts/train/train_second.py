@@ -1,15 +1,19 @@
 import argparse
+from dataclasses import replace
 from typing import Any, NamedTuple, cast, override
 
 import torch
 from torch.utils.data import DataLoader
 
+from tts.config.stage1.data_config import DataConfig as Stage1DataConfig
+from tts.config.stage1.model_config import MonotonicTTSConfigs
 from tts.config.stage2.data_config import Stage2DataConfig
 from tts.config.stage2.model_config import DiffusionTTSConfigs
 from tts.config.utils.io import load_config
 from tts.data.data_types import TTSBatch
 from tts.data.tts_datafactory import TTSDataFactory
 from tts.logger.utils.plot_spectrogram import plot_spectrogram
+from tts.logger.utils.plot_alignment import plot_alignment
 from tts.models.diffusion_tts import DiffusionForwardOutput, KarrasTTSSynthesizer
 from tts.models.init_diffusion_tts import init_diffusion_tts
 
@@ -198,6 +202,40 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
                 )
                 self.logger.log_text("Train/Inferred_Script", script, step)
 
+            # ------------------------------------------------------------------
+            # Stage-1 logging (alignmant, text-features)
+            # ------------------------------------------------------------------
+            if output.soft_attn is not None:
+                s_len = int(batch.spec_lengths[0].item())
+                t_len = int(batch.text_lengths[0].item())
+
+                soft_attn_2d = output.soft_attn[0, :s_len, :t_len].detach().cpu()
+                self.logger.log_figure(
+                    "Train/Soft_Alignment_Gamma",
+                    plot_alignment(soft_attn_2d),
+                    step,
+                )
+
+                if output.hard_attn is not None:
+                    hard_attn_2d = output.hard_attn[0, :s_len, :t_len].detach().cpu()
+                    self.logger.log_figure(
+                        "Train/Hard_Viterbi_Alignment",
+                        plot_alignment(hard_attn_2d),
+                        step,
+                    )
+
+            if output.aligned_texts is not None:
+                s_len_full = int(batch.spec_lengths[0].item())
+
+                # output.aligned_texts: (B, C_text, T_mel)
+                aligned_feat_2d = output.aligned_texts[0, :, :s_len_full].detach().cpu()
+
+                self.logger.log_figure(
+                    "Train/Stage1_Aligned_Feats",
+                    plot_spectrogram(aligned_feat_2d),
+                    step,
+                )
+
     @override
     def validation_step(
         self,
@@ -277,7 +315,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
                     x_lengths=last_batch.text_lengths[:1],
                     cond=last_batch.cond[:1],
                     n_steps=35,
-                    guidance_scale=(3.5, 1.5),
+                    guidance_scale=(5.0, 3.0),
                     cfg_mode="sequential",
                 )
                 # Note: inference returns (B, T_mel, n_mels)
@@ -299,19 +337,59 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
 
 def main():
     parser = argparse.ArgumentParser(description="Train Stage 2 Diffusion TTS (EDM)")
-    parser.add_argument("-c", "--data_config", type=str, help="Path to data config JSON")
-    parser.add_argument("-m", "--model_config", type=str, help="Path to model config JSON")
+    parser.add_argument("-c", "--data_config", type=str, help="Path to Stage 2 data config JSON")
+    parser.add_argument("-m", "--model_config", type=str, help="Path to Stage 2 model config JSON")
+
+    parser.add_argument(
+        "--s1_data_config",
+        type=str,
+        default=None,
+        help=(
+            "Optional path to Stage 1 data config JSON. "
+            "If provided, it overrides data_config.audio and data_config.dataset."
+        ),
+    )
+    parser.add_argument(
+        "--s1_model_config",
+        type=str,
+        default=None,
+        help=(
+            "Optional path to Stage 1 model config JSON. "
+            "If provided, it overrides model_config.s1_config."
+        ),
+    )
+
     args = parser.parse_args()
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
     data_config = (
         load_config(args.data_config, Stage2DataConfig) if args.data_config else Stage2DataConfig()
     )
+
     model_config = (
         load_config(args.model_config, DiffusionTTSConfigs)
         if args.model_config
         else DiffusionTTSConfigs()
     )
+
+    # Override Stage 2 audio/dataset config from Stage 1 data config.
+    # Stage 2 keeps its own train config.
+    if args.s1_data_config is not None:
+        s1_data_config = load_config(args.s1_data_config, Stage1DataConfig)
+        data_config = replace(
+            data_config,
+            audio=s1_data_config.audio,
+            dataset=s1_data_config.dataset,
+        )
+
+    # Override Stage 1 model config inside Stage 2 model config.
+    if args.s1_model_config is not None:
+        s1_model_config = load_config(args.s1_model_config, MonotonicTTSConfigs)
+        model_config = replace(
+            model_config,
+            s1_config=s1_model_config,
+        )
 
     trainer = Stage2Trainer(data_config, model_config, device)
     trainer.run()

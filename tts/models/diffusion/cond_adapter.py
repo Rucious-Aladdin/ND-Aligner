@@ -254,7 +254,6 @@ class ConditionAdapter(nn.Module):
         smoothing_hidden_dim: int = 128,
         smoothing_kernel_size: int = 3,
         smoothing_num_layers: int = 4,
-        smoothing_alpha: float = -2.0,
         apply_smoothing: bool = False,
         apply_local_text_progress: bool = False,
         apply_global_text_progress: bool = False,
@@ -278,8 +277,6 @@ class ConditionAdapter(nn.Module):
                 num_layers=smoothing_num_layers,
             )
 
-        self.smoothing_alpha = nn.Parameter(torch.tensor(smoothing_alpha))
-
     @override
     def forward(
         self,
@@ -298,7 +295,8 @@ class ConditionAdapter(nn.Module):
         )
 
         if self.smoothing_net is not None:
-            x = aligned_feats + self.smoothing_alpha.exp() * self.smoothing_net(x)
+            x = self.smoothing_net(x, spec_mask)
+
         return x * spec_mask
 
 
@@ -370,7 +368,6 @@ if __name__ == "__main__":
         smoothing_hidden_dim=128,
         smoothing_kernel_size=3,
         smoothing_num_layers=2,
-        smoothing_alpha=-2.0,
         apply_smoothing=True,
         apply_local_text_progress=True,
         apply_global_text_progress=True,
@@ -398,5 +395,4 @@ if __name__ == "__main__":
     num_grad_params = sum(p.grad is not None for p in adapter.parameters() if p.requires_grad)
     print("num trainable params:", sum(p.numel() for p in adapter.parameters()))
     print("num params with grad:", num_grad_params)
-    print("smoothing_alpha exp:", adapter.smoothing_alpha.exp().item())
     print("test passed.")

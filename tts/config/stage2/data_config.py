@@ -8,8 +8,8 @@ from ..stage1.data_config import AudioConfig, DatasetConfigs
 class DiffusionTrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    run_name: str = "karras_vctk+progress"
-    # run_name: str = "karras_libritts+progress"
+    # run_name: str = "karras_vctk+progress+smoothing"
+    run_name: str = "karras_libritts+progress+smoothing"
 
     continue_path: str = ""
     continue_dir: str = ""
@@ -18,8 +18,8 @@ class DiffusionTrainConfigs:
 
     # --- Stage 1 Model Loading ---
     # Path to the frozen stage 1 checkpoint (REQUIRED for Stage 2 training)
-    # stage1_ckpt_path: str = "./checkpoints/unet_unary_checkpoints/ckpt_step_235000_libritts.pth"
-    stage1_ckpt_path: str = "./checkpoints/unet_unary_checkpoints/ckpt_step_524000_vctk.pth"
+    stage1_ckpt_path: str = "./checkpoints/unet_unary_checkpoints/ckpt_step_235000_libritts.pth"
+    # stage1_ckpt_path: str = "./checkpoints/unet_unary_checkpoints/ckpt_step_524000_vctk.pth"
 
     # --- Intervals ---
     val_sanity_check: bool = True
@@ -52,7 +52,7 @@ class DiffusionTrainConfigs:
     use_tensorboard: bool = True
 
     # --- Classifier-Free Guidance ---
-    text_cond_mask_ratio: float = 0.2
+    text_cond_mask_ratio: float = 0.10
     text_cond_drop_prob: float = 0.10
     spk_cond_drop_prob: float = 0.15
 

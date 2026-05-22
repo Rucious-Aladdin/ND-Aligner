@@ -25,7 +25,7 @@ class SpecEncoderConfigs:
     cond_dim: int = SPK_COND_DIM
 
     # architectures
-    kernel_size: int = 3
+    kernel_size: int = 1
     dropout_p: float = 0.1
     dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 1, 1])
 
@@ -65,7 +65,7 @@ class CRFAlignerConfigs:
     unet_base_dim: int = 16
     unet_groups: int = 8
 
-    unary_support_type: str = "global"  # "local" or "global"
+    unary_support_type: str = "local"  # "local" or "global"
     unary_radius: int = 10
     unary_temperature: float = 1.0
     unary_scale_init: float = -2.0

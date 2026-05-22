@@ -1,6 +1,7 @@
 from ..config.stage2.model_config import DiffusionTTSConfigs
 from .diffusion.denoiser_net import MelDenoiserNetwork
 from .diffusion.score_estimator import KarrasScoreEstimator
+from .diffusion.cond_adapter import ConditionAdapter
 from .diffusion_tts import KarrasTTSSynthesizer
 from .init_monotonic_tts import init_monotonic_tts
 
@@ -50,15 +51,24 @@ def init_diffusion_tts(
         p_std=config.estimator.p_std,
     )
 
+    cond_adapter = ConditionAdapter(
+        in_dim=config.cond_adapter.in_dim,
+        progress_hidden_dim=config.cond_adapter.progress_hidden_dim,
+        smoothing_hidden_dim=config.cond_adapter.smoothing_hidden_dim,
+        smoothing_kernel_size=config.cond_adapter.smoothing_kernel_size,
+        smoothing_num_layers=config.cond_adapter.smoothing_num_layers,
+        apply_smoothing=config.cond_adapter.apply_smoothing,
+        apply_local_text_progress=config.cond_adapter.apply_local_text_progress,
+        apply_global_text_progress=config.cond_adapter.apply_global_text_progress,
+        apply_spec_progress=config.cond_adapter.apply_spec_progress,
+    )
+
     # 5. Initialize Integrated Model
     model = KarrasTTSSynthesizer(
         syn=syn_backbone,
         estimator=estimator,
+        cond_adapter=cond_adapter,
         num_unet_downsample=config.num_unet_downsample,
         unet_out_size=config.unet_out_size,
-        apply_global_text_progress=config.apply_global_text_progress,
-        apply_local_text_progress=config.apply_local_text_progress,
-        apply_spec_progress=config.apply_spec_progress,
-        progress_hidden_dim=config.progress_hidden_dim,
     )
     return model.to(device)

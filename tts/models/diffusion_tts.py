@@ -3,16 +3,16 @@ from __future__ import annotations
 from typing import Any, NamedTuple, override, cast
 
 import torch
-import torch.nn as nn
 import torch.nn.functional as F
 
 from .base_model import BaseModel
 from .diffusion.sampler import KarrasSampler
 from .diffusion.score_estimator import KarrasScoreEstimator
+from .diffusion.cond_adapter import ConditionAdapter
+
 from .monotonic_tts import MonotonicTTSSynthesizer, SynthesizerInferenceOutput
 from .utils.fix_len_compatibility import fix_len_compatibility
 from tts.models.utils.sequence_mask import sequence_mask
-from tts.models.layers.progress_linear import ProgressLinear
 
 
 class DiffusionForwardOutput(NamedTuple):
@@ -22,6 +22,10 @@ class DiffusionForwardOutput(NamedTuple):
     mask: torch.Tensor  # (B, 1, T_mel) - Sequence mask
     # The value just before loss_weight multiplication: (denoised - y_gt)^2 * mask
     mel_loss_unweighted: torch.Tensor  # (B, n_mels, T_mel)
+
+    soft_attn: torch.Tensor | None
+    hard_attn: torch.Tensor | None
+    aligned_texts: torch.Tensor | None
 
 
 class KarrasTTSSynthesizer(BaseModel):
@@ -34,13 +38,10 @@ class KarrasTTSSynthesizer(BaseModel):
         self,
         syn: MonotonicTTSSynthesizer,
         estimator: KarrasScoreEstimator,
+        cond_adapter: ConditionAdapter,
         stochastic_sampling: bool = True,
         num_unet_downsample: int = 2,
         unet_out_size: int = 172,
-        apply_local_text_progress: bool = False,
-        apply_global_text_progress: bool = False,
-        apply_spec_progress: bool = False,
-        progress_hidden_dim: int = 192,
     ) -> None:
         super().__init__()
         self.syn_backbone = syn
@@ -50,52 +51,7 @@ class KarrasTTSSynthesizer(BaseModel):
         self.unet_out_size = unet_out_size
 
         # Applying Progress Conditioning-Aware
-        text_dim = syn.text_embedder.hidden_channels
-        self.progress_cond_dim = progress_hidden_dim
-
-        self.local_text_progress_layer = None
-        self.global_text_progress_layer = None
-        self.spec_progress_layer = None
-        self.progress_cond_dim = 0
-
-        num_layers = 0
-        if apply_global_text_progress:
-            self.global_text_progress_layer = ProgressLinear(
-                in_dim=text_dim,
-                out_dim=progress_hidden_dim,
-            )
-            num_layers += 1
-
-        if apply_local_text_progress:
-            self.local_text_progress_layer = ProgressLinear(
-                in_dim=text_dim,
-                out_dim=progress_hidden_dim,
-            )
-            num_layers += 1
-
-        if apply_spec_progress:
-            self.spec_progress_layer = ProgressLinear(
-                in_dim=text_dim,
-                out_dim=progress_hidden_dim,
-            )
-            num_layers += 1
-
-        self.progress_mlp = None
-        if num_layers > 0:
-            self.progress_cond_dim = progress_hidden_dim
-            self.progress_mlp = nn.Sequential(
-                nn.Conv1d(
-                    in_channels=progress_hidden_dim,
-                    out_channels=progress_hidden_dim * 2,
-                    kernel_size=1,
-                ),
-                nn.GELU(),
-                nn.Conv1d(
-                    in_channels=progress_hidden_dim * 2,
-                    out_channels=text_dim,
-                    kernel_size=1,
-                ),
-            )
+        self.cond_adapter = cond_adapter
 
         self.sampler = KarrasSampler(estimator)
 
@@ -152,24 +108,26 @@ class KarrasTTSSynthesizer(BaseModel):
             )
 
             # aligned_feats: (B, T_mel, C) -> (B, C, T_mel)
-            aligned_feats = out.aligned_feats.transpose(1, 2)
+            aligned_texts = out.aligned_feats.transpose(1, 2)
 
             # spec_mask: (B, T_mel) -> (B, 1, T_mel)
             mask = out.spec_mask.unsqueeze(1)
 
         assert out.hard_gamma is not None
-        aligned_feats = self._make_progress_conditioning(
+        aligned_texts = self.cond_adapter(
             h_text=h_text.detach(),
             text_mask=text_mask.detach(),
-            aligned_feats=aligned_feats.detach(),
+            aligned_feats=aligned_texts.detach(),
             spec_mask=mask.detach(),
             hard_gamma=out.hard_gamma.detach(),
         )
 
-        y_gt, aligned_feats, mask = self._get_random_segments(
+        aligned_texts_log = aligned_texts.clone().detach()
+
+        y_gt, aligned_texts, mask = self._get_random_segments(
             y_gt=y,
             mask=mask,
-            aligned_feats=aligned_feats,
+            aligned_feats=aligned_texts,
         )
 
         # >> Diffusion Training Step (Sigma sampling is handled internally)
@@ -185,7 +143,7 @@ class KarrasTTSSynthesizer(BaseModel):
             x=y_noisy,
             sigma=sigma,
             mask=mask,
-            text=aligned_feats,
+            text=aligned_texts,
             spk=cond,
             guidance_scale=1.0,
             text_cond_drop_prob=text_cond_drop_prob,
@@ -204,6 +162,9 @@ class KarrasTTSSynthesizer(BaseModel):
             sigma=sigma,
             mask=mask,
             mel_loss_unweighted=mel_loss_unweighted,
+            soft_attn=out.soft_gamma,
+            hard_attn=out.hard_gamma,
+            aligned_texts=aligned_texts_log,
         )
 
     @override
@@ -242,27 +203,27 @@ class KarrasTTSSynthesizer(BaseModel):
         assert out.hard_gamma is not None
 
         # aligned_feats: (B, T_mel, C) -> (B, C, T_mel)
-        aligned_feats = out.aligned_feats.transpose(1, 2)
+        aligned_texts = out.aligned_feats.transpose(1, 2)
 
         # spec_mask: (B, T_mel) -> (B, 1, T_mel)
         mask = out.spec_mask.unsqueeze(1)
 
-        aligned_feats = self._make_progress_conditioning(
+        aligned_texts = self.cond_adapter(
             h_text=h_text,
             text_mask=text_mask,
-            aligned_feats=aligned_feats,
+            aligned_feats=aligned_texts,
             spec_mask=mask,
             hard_gamma=out.hard_gamma,
         )
 
-        aligned_feats, mask, _ = self._pad_length_compatible(
-            aligned_feats=aligned_feats,
+        aligned_texts, mask, _ = self._pad_length_compatible(
+            aligned_feats=aligned_texts,
             mask=mask,
         )
 
         # 2. Stage 2 Diffusion Refinement
         refined_mel = self.sampler.sample(
-            text=aligned_feats,
+            text=aligned_texts,
             mask=mask,
             spk=cond,
             n_steps=n_steps,
@@ -311,46 +272,6 @@ class KarrasTTSSynthesizer(BaseModel):
 
     def set_sample_mode(self, stochastic: bool = True):
         self.stochastic_sampling = stochastic
-
-    def _make_progress_conditioning(
-        self,
-        h_text: torch.Tensor,  # (B, C_text, T_text)
-        aligned_feats: torch.Tensor,  # (B, C_text, T_mel)
-        hard_gamma: torch.Tensor,  # (B, T_mel, T_text) - Viterbi hard alignment
-        text_mask: torch.Tensor,  # (B, 1, T_text)
-        spec_mask: torch.Tensor,  # (B, 1, T_mel)
-    ) -> torch.Tensor:
-        if self.progress_mlp is None:
-            return aligned_feats  # No progress conditioning applied
-
-        B, _, T_mel = aligned_feats.shape
-        device = aligned_feats.device
-
-        accumulated = torch.zeros(
-            B, self.progress_cond_dim, T_mel, device=device, dtype=aligned_feats.dtype
-        )
-
-        # 2. Global Text Progress
-        if self.global_text_progress_layer is not None:
-            global_prog = self.global_text_progress_layer(h_text, text_mask)
-            global_prog_mel = torch.bmm(global_prog, hard_gamma.transpose(1, 2))
-            accumulated = accumulated + global_prog_mel
-
-        if self.local_text_progress_layer is not None:
-            local_prog_mel = self.local_text_progress_layer.forward_sawtooth(
-                x=aligned_feats,
-                mask=spec_mask,
-                hard_gamma=hard_gamma,
-            )
-            accumulated = accumulated + local_prog_mel
-
-        if self.spec_progress_layer is not None:
-            spec_prog_mel = self.spec_progress_layer(aligned_feats, spec_mask)
-            accumulated = accumulated + spec_prog_mel
-
-        aligned_feats = aligned_feats + self.progress_mlp(accumulated)
-
-        return aligned_feats
 
     def _get_random_segments(
         self,
