@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from dataclasses import fields, is_dataclass
 from typing import Any, Generic, TypeVar
 
+from matplotlib.pyplot import step
 import torch
 from torch.utils.data import DataLoader
 
@@ -180,7 +181,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
                 self.scaler.update()
                 if self.scheduler is not None:
                     self.scheduler.step()
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad(set_to_none=True)
         else:
             scaled_loss.backward()
             if is_step_boundary:
@@ -191,7 +192,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
                 self.optimizer.step()
                 if self.scheduler is not None:
                     self.scheduler.step()
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad(set_to_none=True)
 
         return weighted_loss.item(), metrics, output
 
@@ -213,6 +214,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
         self.model.train()
         num_batches = len(self.train_loader)
         epoch_train_loss = 0.0
+
         mini_batch_step = 0
 
         for step_in_epoch, batch in enumerate(self.train_loader, 1):
@@ -237,6 +239,9 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
                 metrics=metrics,
                 output=output,
             )
+
+            del output
+            del batch
 
             if is_step_boundary and self.global_step % self.train_cfg.save_interval == 0:
                 self.ckpt_manager.save(
@@ -366,7 +371,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
             print("✅  Sanity check passed.")
 
         print(f"🔥  Starting training for {self.train_cfg.max_epochs} epochs...")
-        self.optimizer.zero_grad()
+        self.optimizer.zero_grad(set_to_none=True)
 
         for epoch in range(self.start_epoch, self.train_cfg.max_epochs + 1):
             start_time = time.time()

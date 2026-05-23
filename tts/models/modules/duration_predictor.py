@@ -5,6 +5,7 @@ import torch
 from torch import nn
 from torch.nn import functional as F
 
+from tts.models.utils.positional_encoding import PositionalEncoding
 from ..layers.dds_conv import DDSConv
 from ..layers.elementwise_affine import ElementwiseAffine
 from ..layers.flip import Flip
@@ -86,6 +87,7 @@ class StochasticDurationPredictor(nn.Module):
         p_dropout: float,
         n_flows: int = 4,
         gin_channels: int = 0,
+        apply_positional_encoding: bool = True,
     ):
         super().__init__()
         filter_channels = in_channels  # it needs to be removed from future version.
@@ -113,6 +115,11 @@ class StochasticDurationPredictor(nn.Module):
             self.post_flows.append(Flip())
 
         self.pre = nn.Conv1d(in_channels, filter_channels, 1)
+        self.pos_encoding = (
+            PositionalEncoding(filter_channels, max_len=1000)
+            if apply_positional_encoding
+            else nn.Identity()
+        )
         self.proj = nn.Conv1d(filter_channels, filter_channels, 1)
         self.convs = DDSConv(filter_channels, kernel_size, n_layers=3, p_dropout=p_dropout)
         if gin_channels != 0:
@@ -150,6 +157,7 @@ class StochasticDurationPredictor(nn.Module):
         """
         x = torch.detach(x)
         x = self.pre(x)
+        x = self.pos_encoding(x.transpose(1, 2)).transpose(1, 2)
         if cond is not None:
             cond = torch.detach(cond)
             x = x + self.cond(cond)

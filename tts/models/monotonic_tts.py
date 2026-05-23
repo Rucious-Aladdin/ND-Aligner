@@ -5,7 +5,7 @@ import torch.nn.functional as F
 
 from tts.models.modules.spec_decoder import SpecDecoder
 from tts.models.modules.duration_predictor import StochasticDurationPredictor
-from tts.models.modules.text_embedder import TextEmbedder
+from tts.models.modules.text_encoder import TextEncoder
 from tts.models.modules.hifigan_vocoder import Generator
 from tts.models.modules.monotonic_aligner import MonotonicCRFAligner
 from tts.models.modules.spec_encoder import SpecEncoder
@@ -108,7 +108,7 @@ class MonotonicTTSSynthesizer(BaseModel):
 
     def __init__(
         self,
-        text_encoder: TextEmbedder,
+        text_encoder: TextEncoder,
         dur_predictor: StochasticDurationPredictor,
         spec_decoder: SpecDecoder,
         aligner: MonotonicCRFAligner | None = None,
@@ -118,7 +118,7 @@ class MonotonicTTSSynthesizer(BaseModel):
     ):
         super().__init__()
 
-        self.text_embedder = text_encoder
+        self.text_encoder = text_encoder
         self.crf_aligner = aligner
 
         self.spec_encoder = spec_encoder
@@ -153,14 +153,14 @@ class MonotonicTTSSynthesizer(BaseModel):
         # ---------------------------
         # 1. Text / speech representations
         # ---------------------------
-        h_text = self.text_embedder(
-            text_token_ids=x,
-            text_mask=text_mask,
+        h_text = self.text_encoder(
+            x=x,
+            x_mask=text_mask,
         )  # (B, C_text, T_text)
 
-        h_spec = self._encode_speech(
-            y=y,
-            spec_mask=spec_mask,
+        h_spec = self.spec_encoder(
+            x=y,
+            mask=spec_mask.unsqueeze(1),
             cond=cond,
         )  # (B, C_spec, T_mel)
 
@@ -300,7 +300,7 @@ class MonotonicTTSSynthesizer(BaseModel):
         text_mask_bool = sequence_mask(x_lengths, x.size(1))
         text_mask = text_mask_bool.unsqueeze(1).float()
 
-        h_text = self.text_embedder(
+        h_text = self.text_encoder(
             text_token_ids=x,
             text_mask=text_mask,
         )
@@ -536,37 +536,6 @@ class MonotonicTTSSynthesizer(BaseModel):
             viterbi_path=viterbi_path,
             viterbi_logp=viterbi_logp,
         )
-
-    def _encode_speech(
-        self,
-        y: torch.Tensor,
-        spec_mask: torch.Tensor,
-        cond: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        Compatibility wrapper for SpecEncoder.
-
-        Preferred new SpecEncoder API:
-            h_spec = spec_encoder(y, mask, cond)
-
-        Backward-compatible old API:
-            spec_logits, spec_probs, h_spec = spec_encoder(y, mask, cond)
-
-        The pairwise aligner uses only h_spec.
-        """
-        assert self.spec_encoder is not None
-
-        enc_out = self.spec_encoder(
-            y,
-            spec_mask.unsqueeze(1),
-            cond=cond,
-        )
-
-        if isinstance(enc_out, tuple):
-            # Old SpecEncoder returned (logits, probs, h_spec).
-            return enc_out[-1]
-
-        return enc_out
 
     def mel2wav(self, x: torch.Tensor) -> torch.Tensor:
         assert self.vocoder is not None, "Vocoder is not initialized."

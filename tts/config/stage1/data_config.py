@@ -25,20 +25,22 @@ class AudioConfig:
 @dataclass(frozen=True)
 class DatasetConfigs:
     # List of datasets to load: "ljspeech", "vctk", "libritts"
-    # dataset_list: list[str] = field(default_factory=lambda: ["libritts"])
-    dataset_list: list[str] = field(default_factory=lambda: ["vctk"])
+    dataset_list: list[str] = field(default_factory=lambda: ["libritts"])
+    # dataset_list: list[str] = field(default_factory=lambda: ["vctk"])
 
     # Root directories for each dataset type (preprocessed)
     ljspeech_root: str = os.path.join(DATA_PARENT_DIR, "LJSpeech-1.1-preprocessed")
     vctk_root: str = os.path.join(DATA_PARENT_DIR, "VCTK-preprocessed")
     libritts_root: str = os.path.join(DATA_PARENT_DIR, "LibriTTS-preprocessed")
 
-    data_cache_dir: str = os.path.join(DATA_PARENT_DIR, "cache-vctk")
+    # data_cache_dir: str = os.path.join(DATA_PARENT_DIR, "cache-vctk")
+    data_cache_dir: str = os.path.join(DATA_PARENT_DIR, "cache-libritts-new")
 
     seed: int = 42
     val_ratio: float = 0.01
+    num_buckets: int = 10
 
-    min_duration_sec: float = 1.5
+    min_duration_sec: float = 2.5
     max_duration_sec: float = 25.0
 
 
@@ -46,7 +48,10 @@ class DatasetConfigs:
 class TrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    run_name: str = "monotonic_tts_local_support_emission_vctk"
+    run_name: str = "stage1_libritts+k=1+dec_pos_enc+dur_pred+bucketing"
+    # run_name: str = "stage1_vctk+k=1+dec_pos_enc+dur_pred+bucketing"
+    # run_name: str = "monotonic_tts_vctk+test"
+
     continue_path: str = ""
     continue_dir: str = ""
     reset_optimizer: bool = False
@@ -65,8 +70,8 @@ class TrainConfigs:
 
     # --- Hardware & Dataloader ---
     seed: int = 1234
-    batch_size: int = 8
-    val_batch_size: int = 8
+    batch_size: int = 6
+    val_batch_size: int = 6
     grad_accumulation_steps: int = 1
     num_workers: int = 8
     fp16_run: bool = False
@@ -102,8 +107,8 @@ class LossConfigs:
     mel_recon_end_step: int = 100000
 
     # Alignment NLL Loss Scheduling
-    align_forward_initial_weight: float = 1.0
-    align_forward_final_weight: float = 1.0
+    align_forward_initial_weight: float = 5.0
+    align_forward_final_weight: float = 2.5
     align_forward_start_step: int = 2500
     align_forward_end_step: int = 5000
 
@@ -111,7 +116,7 @@ class LossConfigs:
     align_diag_initial_weight: float = 5.0
     align_diag_final_weight: float = 0.0
     align_diag_start_step: int = 5000
-    align_diag_end_step: int = 0
+    align_diag_end_step: int = 5010
 
     # Alignment Viterbi KL Loss Scheduling
     align_viterbi_kl_initial_weight: float = 0.0
@@ -121,9 +126,9 @@ class LossConfigs:
 
     # Alignment Viterbi OT Loss Scheduling
     align_viterbi_ot_initial_weight: float = 0.0
-    align_viterbi_ot_final_weight: float = 0.0
-    align_viterbi_ot_start_step: int = 8000
-    align_viterbi_ot_end_step: int = 30000
+    align_viterbi_ot_final_weight: float = 10.0
+    align_viterbi_ot_start_step: int = 150000
+    align_viterbi_ot_end_step: int = 200000
 
 
 @dataclass(frozen=True)

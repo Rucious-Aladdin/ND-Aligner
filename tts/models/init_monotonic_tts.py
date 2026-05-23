@@ -3,7 +3,7 @@ import dataclasses
 from ..config.stage1.model_config import MonotonicTTSConfigs
 from .modules.spec_decoder import SpecDecoder
 from .modules.duration_predictor import StochasticDurationPredictor
-from .modules.text_embedder import TextEmbedder
+from .modules.text_encoder import TextEncoder
 from .modules.hifigan_vocoder import Generator
 from .modules.monotonic_aligner import MonotonicCRFAligner
 from .modules.spec_encoder import SpecEncoder
@@ -43,12 +43,12 @@ def init_monotonic_tts(
     else:
         speaker_encoder = None
 
-    text_embedder = TextEmbedder(**dataclasses.asdict(config.txt_enc))
+    text_encoder = TextEncoder(**dataclasses.asdict(config.txt_enc))
     spec_decoder = SpecDecoder(**dataclasses.asdict(config.spec_dec))
     dur_predictor = StochasticDurationPredictor(**dataclasses.asdict(config.dur_predictor))
 
     model = MonotonicTTSSynthesizer(
-        text_encoder=text_embedder,
+        text_encoder=text_encoder,
         dur_predictor=dur_predictor,
         spec_encoder=spec_encoder,
         aligner=aligner,

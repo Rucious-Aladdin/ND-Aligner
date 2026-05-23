@@ -14,10 +14,11 @@ from tts.logger.utils.plot_spectrogram import plot_spectrogram
 from tts.models.init_monotonic_tts import init_monotonic_tts
 from tts.models.monotonic_tts import MonotonicTTSSynthesizer, SynthesizerForwardOutput
 from tts.utils.anneal import get_linear_anneal_weight
-from functools import cached_property
 from .base_trainer import BaseTrainer
 
 TEXT_TOKENIZER = TextTokenizer()
+
+# torch.autograd.set_detect_anomaly(True)
 
 
 def prepare_masked_score_for_plot(
@@ -197,6 +198,14 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
         x, x_lengths = batch.text, batch.text_lengths
         y, y_lengths = batch.spec, batch.spec_lengths
         cond = batch.cond
+
+        # print(
+        #     f"[shape] step={step} | B={x.size(0)} | T_mel={int(y_lengths.max().item())} "
+        #     + f"| T_text={int(x_lengths.max().item())} | "
+        #     + f"B*T_mel*T_text={x.size(0) * int(y_lengths.max().item()) * int(x_lengths.max().item())}"
+        # )
+        # print("x_lengths:", x_lengths)
+        # print("y_lengths:", y_lengths)
 
         loss_weights = self._get_loss_weights(step)
 
@@ -449,6 +458,28 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
             plot_alignment(plot_raw_unary, tokens=tokens),
             step,
         )
+
+        log_b_2d = out.log_b[0, :s_len, :t_len].detach()
+
+        plot_log_b = prepare_masked_score_for_plot(
+            log_b_2d,
+            fill_mode="min",
+        )
+
+        self.logger.log_figure(
+            f"{prefix}/Log_Unary_Potential",
+            plot_alignment(plot_log_b, tokens=tokens),
+            step,
+        )
+
+        unary_support_prob = log_b_2d.float().exp().masked_fill(~valid_2d, 0.0)
+
+        self.logger.log_figure(
+            f"{prefix}/Unary_Sup_Probability",
+            plot_alignment(unary_support_prob, tokens=tokens),
+            step,
+        )
+
         # ------------------------------------------------------------------
         # Audio logging
         # ------------------------------------------------------------------
@@ -613,6 +644,9 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
 
 
 def main():
+    # torch.backends.cudnn.benchmark = False
+    # torch.backends.cudnn.deterministic = True
+
     parser = argparse.ArgumentParser(description="Train Stage 1 Monotonic TTS")
     parser.add_argument("-c", "--data_config", type=str, help="Path to data config JSON")
     parser.add_argument("-m", "--model_config", type=str, help="Path to model config JSON")

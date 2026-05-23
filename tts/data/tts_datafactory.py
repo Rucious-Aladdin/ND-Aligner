@@ -12,13 +12,16 @@ from tts.config.stage1.data_config import DataConfig
 from .data_parser import LibriTTSParser, LJSpeechParser, VCTKParser
 from .data_types import TTSBatch, TTSItem
 from .tts_dataset import TTSDataset
+from .quantile_bucket_sampler import QuantileDurationBatchSampler
 
 
 class TTSCollate:
     def __init__(self, spec_pad_value: float):
         self.spec_pad_value = spec_pad_value
 
-    def __call__(self, batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, str]]) -> TTSBatch:
+    def __call__(
+        self, batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, str]]
+    ) -> TTSBatch:
         xs, ys, conds, scripts = zip(*batch)
 
         x_lengths = torch.tensor([x.size(0) for x in xs], dtype=torch.long)
@@ -79,9 +82,12 @@ class TTSDataFactory:
 
         # 1.5 Filter by duration
         print(
-            f"[Info] Filtering items by duration ({self.dataset_cfg.min_duration_sec}s ~ {self.dataset_cfg.max_duration_sec}s)..."
+            f"[Info] Filtering items by duration "
+            + f"({self.dataset_cfg.min_duration_sec}s ~ {self.dataset_cfg.max_duration_sec}s)..."
         )
-        filtered_items: list[TTSItem] = []
+
+        filtered_pairs: list[tuple[TTSItem, float]] = []
+
         for item in tqdm(all_items, desc="Filtering data"):
             try:
                 duration = librosa.get_duration(path=item.audio_path)
@@ -90,27 +96,34 @@ class TTSDataFactory:
                     <= duration
                     <= self.dataset_cfg.max_duration_sec
                 ):
-                    filtered_items.append(item)
+                    filtered_pairs.append((item, float(duration)))
             except Exception as e:
                 print(f"[Warning] Error checking duration for {item.audio_path}: {e}. Skipping.")
 
         print(
-            f"[Info] Filtered {len(all_items) - len(filtered_items)} items. Remaining: {len(filtered_items)}"
+            f"[Info] Filtered {len(all_items) - len(filtered_pairs)} items. "
+            + f"Remaining: {len(filtered_pairs)}"
         )
-        all_items = filtered_items
 
         # 2. Shuffle and Split
         random.seed(self.dataset_cfg.seed)
-        random.shuffle(all_items)
+        random.shuffle(filtered_pairs)
 
-        num_total = len(all_items)
+        num_total = len(filtered_pairs)
         num_valid = int(num_total * self.dataset_cfg.val_ratio)
 
-        self.valid_items = all_items[:num_valid]
-        self.train_items = all_items[num_valid:]
+        valid_pairs = filtered_pairs[:num_valid]
+        train_pairs = filtered_pairs[num_valid:]
+
+        self.valid_items = [item for item, _duration in valid_pairs]
+        self.train_items = [item for item, _duration in train_pairs]
+
+        self.valid_durations = [duration for _item, duration in valid_pairs]
+        self.train_durations = [duration for _item, duration in train_pairs]
 
         print(
-            f"[Info] Data split complete: {len(self.train_items)} train, {len(self.valid_items)} valid"
+            f"[Info] Data split complete: "
+            + f"{len(self.train_items)} train, {len(self.valid_items)} valid"
         )
 
         # 3. Create Datasets
@@ -121,14 +134,21 @@ class TTSDataFactory:
 
     @property
     def train_loader(self) -> DataLoader[Any]:
+        batch_sampler = QuantileDurationBatchSampler(
+            bucketing_keys=self.train_durations,
+            batch_size=self.train_cfg.batch_size,
+            num_buckets=self.dataset_cfg.num_buckets,
+            seed=self.dataset_cfg.seed,
+            shuffle=True,
+            drop_last=True,
+        )
+
         return DataLoader(
             self.train_dataset,
-            batch_size=self.train_cfg.batch_size,
-            shuffle=True,
+            batch_sampler=batch_sampler,
             collate_fn=self.collate_fn,
             num_workers=self.train_cfg.num_workers,
             pin_memory=True,
-            drop_last=self.train_cfg.drop_last,
         )
 
     @property

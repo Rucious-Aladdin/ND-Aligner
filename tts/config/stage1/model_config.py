@@ -1,20 +1,19 @@
 from dataclasses import dataclass, field
-from tts.tokenizer.letters import SYMBOL_DICTS
 
 N_MELS = 80
-SPEC_DIM = 256
+SPEC_DIM = 192
 
-TEXT_DIM = 256
+TEXT_DIM = 192
 SPK_COND_DIM = 192  # ECAPA-TDNN
-
-NUM_TEXT_TOKENS = len(SYMBOL_DICTS) + 1
 
 
 @dataclass(frozen=True)
-class TextEmbedderConfigs:
+class TextEncoderConfigs:
     # common dimensions
     n_vocab: int = 256
     dim_out: int = TEXT_DIM
+    dim_hidden: int = 256
+    kernel_sizes: list[int] = field(default_factory=lambda: [3, 3, 3])
 
 
 @dataclass(frozen=True)
@@ -25,9 +24,9 @@ class SpecEncoderConfigs:
     cond_dim: int = SPK_COND_DIM
 
     # architectures
-    kernel_size: int = 1
+    kernel_size: int = 3
     dropout_p: float = 0.1
-    dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 1, 1])
+    dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 1, 1, 1, 1])
 
 
 @dataclass(frozen=True)
@@ -38,25 +37,23 @@ class SpecDecoderConfigs:
     cond_dim: int = SPK_COND_DIM
     dilation_base: int = 1
     dropout: float = 0.1
-    kernel_sizes: list[int] = field(default_factory=lambda: [3, 3, 3, 3])
+    kernel_sizes: list[int] = field(default_factory=lambda: [1, 1, 1])
 
 
 @dataclass(frozen=True)
 class DurationPredictorConfigs:
-    # dimensions
     in_channels: int = TEXT_DIM
     gin_channels: int = SPK_COND_DIM
     filter_channels: int = 256
 
-    # architectures
     kernel_size: int = 3
     p_dropout: float = 0.1
     n_flows: int = 6
+    apply_positional_encoding: bool = True
 
 
 @dataclass(frozen=True)
 class CRFAlignerConfigs:
-    # dimensions
     dim_spec: int = SPEC_DIM
     dim_text: int = TEXT_DIM
     dim_cond: int = SPK_COND_DIM
@@ -79,7 +76,7 @@ class HifiGANVocoderConfigs:
 
 @dataclass(frozen=True)
 class MonotonicTTSConfigs:
-    txt_enc: TextEmbedderConfigs = field(default_factory=TextEmbedderConfigs)
+    txt_enc: TextEncoderConfigs = field(default_factory=TextEncoderConfigs)
     spec_enc: SpecEncoderConfigs = field(default_factory=SpecEncoderConfigs)
     spec_dec: SpecDecoderConfigs = field(default_factory=SpecDecoderConfigs)
     dur_predictor: DurationPredictorConfigs = field(default_factory=DurationPredictorConfigs)

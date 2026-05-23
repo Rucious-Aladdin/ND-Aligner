@@ -86,7 +86,7 @@ class KarrasTTSSynthesizer(BaseModel):
         with torch.no_grad():
             h_text = cast(
                 torch.Tensor,
-                self.syn_backbone.text_embedder(
+                self.syn_backbone.text_encoder(
                     text_token_ids=x,
                     text_mask=text_mask,
                 ),
@@ -188,7 +188,7 @@ class KarrasTTSSynthesizer(BaseModel):
         text_mask = text_mask_bool.unsqueeze(1).to(dtype=x.dtype)
 
         # 1. Get Aligned Features from Stage 1 (detached)
-        h_text = self.syn_backbone.text_embedder(
+        h_text = self.syn_backbone.text_encoder(
             text_token_ids=x,
             text_mask=text_mask,
         )  # (B, C_text, T_text)
