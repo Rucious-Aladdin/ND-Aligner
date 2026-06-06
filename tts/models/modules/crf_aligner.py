@@ -2,12 +2,13 @@ from typing import override
 
 import torch
 import torch.nn as nn
-from ..submodules.sequential_unet import UNet2d
+from ..submodules.unet2d import UNet2d
+from ..submodules.conv2d_net import Conv2dNet
 
 
-class UNetUnaryPotentialPredictor(nn.Module):
+class UnaryPotentialPredictor(nn.Module):
     """
-    U-Net unary potential predictor.
+    unary potential predictor.
 
     Pairwise input:
         [
@@ -39,11 +40,23 @@ class UNetUnaryPotentialPredictor(nn.Module):
         base_dim: int = 16,
         groups: int = 8,
         unary_scale_init: float = -2.0,
+        unary_network_type: str = "unet",
+        conv_num_layers: int = 4,
+        conv_kernel_size: tuple[int, int] = (3, 3),
+        apply_progress_feature: bool = True,
     ):
         super().__init__()
 
+        if unary_network_type not in ("unet", "conv", "negative-l2"):
+            raise ValueError(
+                "unary_network_type must be one of "
+                + f"'unet', 'conv', 'negative-l2', got {unary_network_type!r}."
+            )
+
+        self.unary_network_type = unary_network_type
         self.dim_latent = dim_latent
         self.cond_channels = cond_channels
+        self.apply_progress_feature = apply_progress_feature
 
         self.spec_proj = nn.Sequential(
             nn.Linear(dim_spec, dim_latent * 2),
@@ -59,13 +72,33 @@ class UNetUnaryPotentialPredictor(nn.Module):
             nn.Linear(dim_latent * 2, dim_latent),
         )
 
-        self.cond_proj = nn.Linear(dim_cond, cond_channels)
+        if unary_network_type in ("unet", "conv"):
+            self.cond_proj = nn.Linear(dim_cond, cond_channels)
 
-        self.unet = UNet2d(
-            dim_in=2 * dim_latent + cond_channels + self.progress_dim,
-            base_dim=base_dim,
-            groups=groups,
-        )
+            in_dim = 2 * dim_latent + cond_channels
+            if apply_progress_feature:
+                in_dim += self.progress_dim
+
+            if unary_network_type == "unet":
+                self.score_net = UNet2d(
+                    dim_in=in_dim,
+                    base_dim=base_dim,
+                    groups=groups,
+                )
+
+            elif unary_network_type == "conv":
+                self.score_net = Conv2dNet(
+                    dim_in=in_dim,
+                    dim_hidden=base_dim,
+                    dim_out=1,
+                    num_layers=conv_num_layers,
+                    kernel_size=conv_kernel_size,
+                    groups=groups,
+                )
+
+        else:
+            self.cond_proj = None
+            self.score_net = None
 
         # Keeps early evidence small.
         self.evidence_scale = nn.Parameter(
@@ -129,10 +162,6 @@ class UNetUnaryPotentialPredictor(nn.Module):
         spec_lengths: torch.Tensor,  # (B,)
         text_lengths: torch.Tensor,  # (B,)
     ) -> torch.Tensor:
-        """
-        Returns:
-            unary_potential: raw pairwise unary score e[t, j], (B, T_s, T_t)
-        """
         h_spec_t = h_spec.transpose(1, 2).contiguous()  # (B, T_s, C_s)
         h_text_t = h_text.transpose(1, 2).contiguous()  # (B, T_t, C_t)
 
@@ -141,6 +170,15 @@ class UNetUnaryPotentialPredictor(nn.Module):
 
         B, T_s, C = h_spec_t.shape
         _, T_t, _ = h_text_t.shape
+
+        if self.unary_network_type == "negative-l2":
+            diff = h_spec_t.unsqueeze(2) - h_text_t.unsqueeze(1)
+            unary_potential = -(diff.square().sum(dim=-1))
+            unary_potential = unary_potential * self.evidence_scale.exp()
+            return unary_potential
+
+        assert self.cond_proj is not None
+        assert self.score_net is not None
 
         spec_pair = h_spec_t.unsqueeze(2).expand(B, T_s, T_t, C)
         text_pair = h_text_t.unsqueeze(1).expand(B, T_s, T_t, C)
@@ -153,28 +191,28 @@ class UNetUnaryPotentialPredictor(nn.Module):
             self.cond_channels,
         )
 
-        progress_pair = self._make_progress_features(
-            spec_lengths=spec_lengths,
-            text_lengths=text_lengths,
-            T_s=T_s,
-            T_t=T_t,
-            device=h_spec.device,
-            dtype=h_spec.dtype,
-        )
+        pairwise_parts = [
+            spec_pair,
+            text_pair,
+            cond_pair,
+        ]
 
-        pairwise = torch.cat(
-            [
-                spec_pair,
-                text_pair,
-                cond_pair,
-                progress_pair,
-            ],
-            dim=-1,
-        )  # (B, T_s, T_t, 2C + cond_channels + 4)
+        if self.apply_progress_feature:
+            progress_pair = self._make_progress_features(
+                spec_lengths=spec_lengths,
+                text_lengths=text_lengths,
+                T_s=T_s,
+                T_t=T_t,
+                device=h_spec.device,
+                dtype=h_spec.dtype,
+            )
+            pairwise_parts.append(progress_pair)
 
+        pairwise = torch.cat(pairwise_parts, dim=-1)
         pairwise = pairwise.permute(0, 3, 1, 2).contiguous()
+        # (B, C_pair, T_s, T_t)
 
-        unary_potential = self.unet(pairwise).squeeze(1)
+        unary_potential = self.score_net(pairwise).squeeze(1)
         unary_potential = unary_potential * self.evidence_scale.exp()
 
         return unary_potential
@@ -207,12 +245,19 @@ class MonotonicCRFAligner(nn.Module):
         dim_cond: int,
         dim_unary_latent: int,
         cond_channels: int = 32,
-        unet_base_dim: int = 16,
-        unet_groups: int = 8,
+        # unary network configs
+        unary_network_type: str = "unet",  # "unet", "conv", "negative-l2"
+        unary_base_dim: int = 16,
+        unary_groups: int = 8,
+        # conv only configs
+        conv_num_layers: int = 4,
+        conv_kernel_size: tuple[int, int] = (3, 3),
+        # normalization and support configs
         unary_support_type: str = "local",  # or "global"
         unary_radius: int = 10,
         unary_temperature: float = 1.0,
         unary_scale_init: float = -2.0,
+        unary_apply_progress_feature: bool = True,
     ):
         super().__init__()
 
@@ -228,15 +273,19 @@ class MonotonicCRFAligner(nn.Module):
         self.unary_local_radius = int(unary_radius)
         self.unary_temperature = float(unary_temperature)
 
-        self.unary_predictor = UNetUnaryPotentialPredictor(
+        self.unary_predictor = UnaryPotentialPredictor(
             dim_spec=dim_spec,
             dim_text=dim_text,
             dim_latent=dim_unary_latent,
             dim_cond=dim_cond,
             cond_channels=cond_channels,
-            base_dim=unet_base_dim,
-            groups=unet_groups,
+            base_dim=unary_base_dim,
+            groups=unary_groups,
             unary_scale_init=unary_scale_init,
+            unary_network_type=unary_network_type,
+            conv_num_layers=conv_num_layers,
+            conv_kernel_size=conv_kernel_size,
+            apply_progress_feature=unary_apply_progress_feature,
         )
 
     @override
@@ -293,10 +342,10 @@ class MonotonicCRFAligner(nn.Module):
             device=device,
         )
 
-        state_valid = length_valid & reachable
+        dp_valid = length_valid & reachable
 
         masked_raw_unary = raw_unary.masked_fill(
-            ~state_valid,
+            ~dp_valid,
             self.neg_large,
         )
 
@@ -309,12 +358,13 @@ class MonotonicCRFAligner(nn.Module):
             log_b,
         ) = self._forward_backward(
             raw_unary=raw_unary,
-            state_valid=state_valid,
+            unary_valid=length_valid,
+            dp_valid=dp_valid,
             spec_lengths=spec_lengths,
             text_lengths=text_lengths,
         )
 
-        gamma = gamma.masked_fill(~state_valid, 0.0)
+        gamma = gamma.masked_fill(~dp_valid, 0.0)
         durations = gamma.sum(dim=1)
 
         norm_log_z = raw_log_z / spec_lengths.float()
@@ -337,7 +387,8 @@ class MonotonicCRFAligner(nn.Module):
 
         hard_gamma, hard_durations, viterbi_path, viterbi_logp = self._viterbi_decode(
             raw_unary=raw_unary,
-            state_valid=state_valid,
+            unary_valid=length_valid,
+            dp_valid=dp_valid,
             spec_lengths=spec_lengths,
             text_lengths=text_lengths,
         )
@@ -358,7 +409,8 @@ class MonotonicCRFAligner(nn.Module):
     def _forward_backward(
         self,
         raw_unary: torch.Tensor,
-        state_valid: torch.Tensor,
+        unary_valid: torch.Tensor,
+        dp_valid: torch.Tensor,
         spec_lengths: torch.Tensor,
         text_lengths: torch.Tensor,
     ) -> tuple[
@@ -375,7 +427,12 @@ class MonotonicCRFAligner(nn.Module):
             S(z) = sum_t log_b[t, z_t]
 
         Allowed stay/advance transitions have zero score.
-        Disallowed transitions are excluded by state_valid/topology.
+        Disallowed transitions are excluded by dp_valid/topology.
+
+        Important:
+            unary_valid is used only when computing normalized unary potentials.
+            dp_valid is used only by the dynamic-programming recursions and
+            posterior masking.
 
         Returns:
             gamma
@@ -390,7 +447,7 @@ class MonotonicCRFAligner(nn.Module):
 
         log_b = self._compute_log_unary_potential(
             evidence=raw_unary,
-            state_valid=state_valid,
+            unary_valid=unary_valid,
         ).contiguous()
 
         # ------------------------------------------------------------------
@@ -406,7 +463,7 @@ class MonotonicCRFAligner(nn.Module):
 
         alpha_t = self.__initial_dp_score(
             log_b=log_b,
-            state_valid=state_valid,
+            dp_valid=dp_valid,
         )
         log_alpha_steps.append(alpha_t)
 
@@ -416,7 +473,7 @@ class MonotonicCRFAligner(nn.Module):
             )
 
             alpha_t = log_b[:, t, :] + torch.logaddexp(stay, adv)
-            alpha_t = alpha_t.masked_fill(~state_valid[:, t, :], self.neg_large)
+            alpha_t = alpha_t.masked_fill(~dp_valid[:, t, :], self.neg_large)
 
             log_alpha_steps.append(alpha_t)
 
@@ -470,7 +527,7 @@ class MonotonicCRFAligner(nn.Module):
                     recursive,
                 )
 
-            beta_t = beta_t.masked_fill(~state_valid[:, t, :], self.neg_large)
+            beta_t = beta_t.masked_fill(~dp_valid[:, t, :], self.neg_large)
 
             log_beta_steps[t] = beta_t
             beta_next = beta_t
@@ -481,10 +538,10 @@ class MonotonicCRFAligner(nn.Module):
         log_z = log_alpha[batch_idx, spec_lengths - 1, text_lengths - 1]
 
         raw_log_gamma = log_alpha + log_beta - log_z.view(B, 1, 1)
-        raw_log_gamma = raw_log_gamma.masked_fill(~state_valid, self.neg_large)
+        raw_log_gamma = raw_log_gamma.masked_fill(~dp_valid, self.neg_large)
 
         # Row-normalize posterior marginals for numerical stability.
-        valid_frame = state_valid.any(dim=-1, keepdim=True)
+        valid_frame = dp_valid.any(dim=-1, keepdim=True)
         row_log_norm = torch.logsumexp(raw_log_gamma, dim=-1, keepdim=True)
 
         log_gamma = torch.where(
@@ -492,9 +549,9 @@ class MonotonicCRFAligner(nn.Module):
             raw_log_gamma - row_log_norm,
             raw_log_gamma,
         )
-        log_gamma = log_gamma.masked_fill(~state_valid, self.neg_large)
+        log_gamma = log_gamma.masked_fill(~dp_valid, self.neg_large)
 
-        gamma = torch.exp(log_gamma).masked_fill(~state_valid, 0.0)
+        gamma = torch.exp(log_gamma).masked_fill(~dp_valid, 0.0)
 
         return (
             gamma,
@@ -508,7 +565,8 @@ class MonotonicCRFAligner(nn.Module):
     def _viterbi_decode(
         self,
         raw_unary: torch.Tensor,
-        state_valid: torch.Tensor,
+        unary_valid: torch.Tensor,
+        dp_valid: torch.Tensor,
         spec_lengths: torch.Tensor,
         text_lengths: torch.Tensor,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
@@ -524,7 +582,7 @@ class MonotonicCRFAligner(nn.Module):
 
         log_b = self._compute_log_unary_potential(
             evidence=raw_unary,
-            state_valid=state_valid,
+            unary_valid=unary_valid,
         )
 
         delta_steps: list[torch.Tensor] = []
@@ -538,7 +596,7 @@ class MonotonicCRFAligner(nn.Module):
 
         delta_t = self.__initial_dp_score(
             log_b=log_b,
-            state_valid=state_valid,
+            dp_valid=dp_valid,
         )
         delta_steps.append(delta_t)
 
@@ -555,7 +613,7 @@ class MonotonicCRFAligner(nn.Module):
             best_prev_score = torch.where(choose_adv, adv, stay)
 
             delta_t = log_b[:, t, :] + best_prev_score
-            delta_t = delta_t.masked_fill(~state_valid[:, t, :], self.neg_large)
+            delta_t = delta_t.masked_fill(~dp_valid[:, t, :], self.neg_large)
 
             backptr[:, t, :] = torch.where(choose_adv, prev_adv, prev_stay)
 
@@ -585,7 +643,7 @@ class MonotonicCRFAligner(nn.Module):
                 if t > 0:
                     j_cur = int(backptr[b, t, j_cur].item())
 
-        hard_attn = hard_attn.masked_fill(~state_valid, 0.0)
+        hard_attn = hard_attn.masked_fill(~dp_valid, 0.0)
         hard_durations = hard_attn.sum(dim=1)
 
         return hard_attn, hard_durations, path, viterbi_logp
@@ -593,7 +651,7 @@ class MonotonicCRFAligner(nn.Module):
     def _compute_log_unary_potential(
         self,
         evidence: torch.Tensor,  # (B, T_s, T_t)
-        state_valid: torch.Tensor,  # (B, T_s, T_t)
+        unary_valid: torch.Tensor,  # (B, T_s, T_t)
     ) -> torch.Tensor:
         """
         Compute normalized unary log potential log_b[t, j].
@@ -611,71 +669,79 @@ class MonotonicCRFAligner(nn.Module):
         if self.unary_support_type == "local":
             return self.__local_support_log_potential(
                 evidence=evidence,
-                state_valid=state_valid,
+                unary_valid=unary_valid,
             )
 
         if self.unary_support_type == "global":
             return self.__global_support_log_potential(
                 evidence=evidence,
-                state_valid=state_valid,
+                unary_valid=unary_valid,
             )
 
         raise RuntimeError(f"Unexpected unary_support_type: {self.unary_support_type!r}")
 
     def __global_support_log_potential(
         self,
-        evidence: torch.Tensor,  # (B, T_s, T_t)
-        state_valid: torch.Tensor,  # (B, T_s, T_t)
+        evidence: torch.Tensor,
+        unary_valid: torch.Tensor,
     ) -> torch.Tensor:
         """
         Global-support unary log potential.
 
-        For each frame t, the denominator is computed over all valid text states.
+        For each frame t, the denominator is computed over length-valid text states.
+        Strict reachability is not applied during unary normalization.
 
             log_phi[t, j]
             =
             e[t, j] / tau
             -
-            logsumexp_{k: valid(t,k)} e[t, k] / tau
+            logsumexp_{k: length_valid(t,k)} e[t, k] / tau
 
-        Returns:
-            log_phi: (B, T_s, T_t)
+        Padding-invalid states are masked after log_phi is computed.
+        Strict DP reachability is applied later by forward-backward/Viterbi.
         """
+        if self.unary_temperature <= 0:
+            raise ValueError(
+                f"Temperature must be positive for global-support log potential, got {self.unary_temperature}."
+            )
+
         temperature = max(float(self.unary_temperature), 1e-6)
 
         score = evidence / temperature
-        score_masked = score.masked_fill(~state_valid, self.neg_large)
+
+        score_for_norm = score.masked_fill(~unary_valid, self.neg_large)
 
         log_denom = torch.logsumexp(
-            score_masked,
+            score_for_norm,
             dim=-1,
             keepdim=True,
-        )  # (B, T_s, 1)
+        )
 
-        log_phi = score_masked - log_denom
-        log_phi = log_phi.masked_fill(~state_valid, self.neg_large)
+        log_phi = score - log_denom
+        log_phi = log_phi.masked_fill(~unary_valid, self.neg_large)
 
         return log_phi
 
     def __local_support_log_potential(
         self,
-        evidence: torch.Tensor,  # (B, T_s, T_t)
-        state_valid: torch.Tensor,  # (B, T_s, T_t)
+        evidence: torch.Tensor,
+        unary_valid: torch.Tensor,
     ) -> torch.Tensor:
         """
         Local-support unary log potential.
 
-        For each pair (t, j), the denominator is computed over a local text window
-        around j. Invalid states are excluded from the denominator.
+        For each pair (t, j), the denominator is computed over length-valid text states
+        inside the local text window around j. Strict reachability is not applied during
+        unary normalization.
 
             log_phi[t, j]
             =
             e[t, j] / tau
             -
-            logsumexp_{k in local_window(j), valid(t,k)} e[t, k] / tau
+            logsumexp_{k in local_window(j), length_valid(t,k)} e[t, k] / tau
 
-        Returns:
-            log_phi: (B, T_s, T_t)
+        Padding-invalid states are masked after log_phi is computed.
+        Strict DP reachability is applied later by forward-backward/Viterbi.
         """
         if self.unary_local_radius < 0:
             raise ValueError(
@@ -691,30 +757,38 @@ class MonotonicCRFAligner(nn.Module):
         temperature = max(float(self.unary_temperature), 1e-6)
 
         score = evidence / temperature
-        score_masked = score.masked_fill(~state_valid, self.neg_large)
 
         W = min(2 * int(self.unary_local_radius) + 1, T_t)
 
         j_idx = torch.arange(T_t, device=evidence.device)
-        start_idx = torch.clamp(j_idx - int(self.unary_local_radius), min=0, max=T_t - W)
+        start_idx = torch.clamp(
+            j_idx - int(self.unary_local_radius),
+            min=0,
+            max=T_t - W,
+        )
 
-        # (B, T_s, T_t - W + 1, W)
-        all_windows = score_masked.unfold(dimension=-1, size=W, step=1).contiguous()
+        score_windows = score.unfold(dimension=-1, size=W, step=1).contiguous()
+        valid_windows = unary_valid.unfold(dimension=-1, size=W, step=1).contiguous()
 
-        # (B, T_s, T_t, W)
-        selected_windows = all_windows[:, :, start_idx, :]
+        selected_score_windows = score_windows[:, :, start_idx, :]
+        selected_valid_windows = valid_windows[:, :, start_idx, :]
 
-        log_denom = torch.logsumexp(selected_windows, dim=-1)  # (B, T_s, T_t)
+        selected_score_windows = selected_score_windows.masked_fill(
+            ~selected_valid_windows,
+            self.neg_large,
+        )
 
-        log_phi = score_masked - log_denom
-        log_phi = log_phi.masked_fill(~state_valid, self.neg_large)
+        log_denom = torch.logsumexp(selected_score_windows, dim=-1)
+
+        log_phi = score - log_denom
+        log_phi = log_phi.masked_fill(~unary_valid, self.neg_large)
 
         return log_phi
 
     def __initial_dp_score(
         self,
         log_b: torch.Tensor,
-        state_valid: torch.Tensor,
+        dp_valid: torch.Tensor,
     ) -> torch.Tensor:
         """
         Common initialization for forward alpha and Viterbi delta.
@@ -725,7 +799,7 @@ class MonotonicCRFAligner(nn.Module):
 
         score = log_b.new_full((B, T_text), self.neg_large)
         score[:, 0] = log_b[:, 0, 0]
-        score = score.masked_fill(~state_valid[:, 0, :], self.neg_large)
+        score = score.masked_fill(~dp_valid[:, 0, :], self.neg_large)
 
         return score
 

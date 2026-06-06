@@ -1,21 +1,11 @@
 from dataclasses import dataclass, field
-from functools import partial
 
-from tts.models.diffusion import cond_adapter
-from tts.models.utils.fix_len_compatibility import fix_len_compatibility
-
-from ..stage1.model_config import MonotonicTTSConfigs, TEXT_DIM
+from ..stage1.model_config import MonotonicTTSConfigs, TEXT_DIM, N_MELS, SPK_COND_DIM
 
 
 @dataclass(frozen=True)
-class UnetConfigs:
-    dim: int = 64
-    dim_mults: list[int] = field(default_factory=lambda: [1, 2, 4])
-    groups: int = 8
-
-
-@dataclass(frozen=True)
-class ScoreEstimatorConfigs:
+class DiffusionModelConfigs:
+    n_mels: int = N_MELS
     sigma_data: float = 2.0990
     mu_data: float = -4.9307
     p_mean: float = -1.2
@@ -25,14 +15,32 @@ class ScoreEstimatorConfigs:
 @dataclass(frozen=True)
 class ConditionAdapterConfigs:
     in_dim: int = TEXT_DIM
+    spk_dim: int = SPK_COND_DIM
     progress_hidden_dim: int = 128
     smoothing_hidden_dim: int = 128
     smoothing_kernel_size: int = 3
-    smoothing_num_layers: int = 8
-    apply_smoothing: bool = True
+    smoothing_num_layers: int = 6
     apply_local_text_progress: bool = True
     apply_global_text_progress: bool = True
     apply_spec_progress: bool = True
+
+
+@dataclass(frozen=True)
+class ConformerDenoiserConfigs:
+    n_mels: int = N_MELS
+    conformer_cond_dim: int = TEXT_DIM
+    conformer_hidden_dim: int = 256
+    conformer_num_layers: int = 6
+    conformer_num_attention_heads: int = 4
+    conformer_feed_forward_expansion_factor: int = 4
+    conformer_conv_expansion_factor: int = 2
+    conformer_input_dropout_p: float = 0.1
+    conformer_feed_forward_dropout_p: float = 0.1
+    conformer_attention_dropout_p: float = 0.1
+    conformer_conv_dropout_p: float = 0.1
+    conformer_conv_kernel_size: int = 7
+    conformer_half_step_residual: bool = True
+    conformer_attn_window_size: int = 3
 
 
 @dataclass(frozen=True)
@@ -41,15 +49,6 @@ class DiffusionTTSConfigs:
     s1_config: MonotonicTTSConfigs = field(default_factory=MonotonicTTSConfigs)
 
     # Stage 2 (Diffusion) specific configuration
-    unet: UnetConfigs = field(default_factory=UnetConfigs)
-    estimator: ScoreEstimatorConfigs = field(default_factory=ScoreEstimatorConfigs)
+    model: DiffusionModelConfigs = field(default_factory=DiffusionModelConfigs)
     cond_adapter: ConditionAdapterConfigs = field(default_factory=ConditionAdapterConfigs)
-
-    # Unet Downsampling aware (seq_len % (2^num_downsample) == 0)
-    num_unet_downsample: int = 2
-    unet_out_size: int = field(default_factory=partial(fix_len_compatibility, 2 * 22050 // 256, 2))
-
-    apply_local_text_progress: bool = True
-    apply_global_text_progress: bool = True
-    apply_spec_progress: bool = True
-    progress_hidden_dim: int = 128
+    denoiser: ConformerDenoiserConfigs = field(default_factory=ConformerDenoiserConfigs)

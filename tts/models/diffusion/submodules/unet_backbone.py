@@ -5,8 +5,8 @@ import numpy as np
 import torch
 from einops import rearrange
 
-from ..layers.film_layer import FiLMLayer
-from ..layers.fourier_embedding import GaussianFourierProjection
+from tts.models.layers.film_layer import FiLMLayer
+from tts.models.layers.fourier_embedding import GaussianFourierProjection
 
 
 class BaseModule(torch.nn.Module):

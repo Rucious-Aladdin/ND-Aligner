@@ -1,4 +1,3 @@
-import os
 from dataclasses import dataclass, field
 
 from ..stage1.data_config import AudioConfig, DatasetConfigs
@@ -8,8 +7,8 @@ from ..stage1.data_config import AudioConfig, DatasetConfigs
 class DiffusionTrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    # run_name: str = "karras_vctk+progress+smoothing"
-    run_name: str = "karras_libritts+progress+smoothing"
+    run_name: str = "karras_vctk+conformer+progress+smoothing"
+    # run_name: str = "karras_libritts+progress+smoothing"
 
     continue_path: str = ""
     continue_dir: str = ""
@@ -18,12 +17,17 @@ class DiffusionTrainConfigs:
 
     # --- Stage 1 Model Loading ---
     # Path to the frozen stage 1 checkpoint (REQUIRED for Stage 2 training)
-    stage1_ckpt_path: str = "./checkpoints/unet_unary_checkpoints/ckpt_step_235000_libritts.pth"
+    # stage1_ckpt_path: str = "./checkpoints/unet_unary_checkpoints/ckpt_step_235000_libritts.pth"
     # stage1_ckpt_path: str = "./checkpoints/unet_unary_checkpoints/ckpt_step_524000_vctk.pth"
+    stage1_ckpt_path: str = "./checkpoints/stage1_improved_unet/vctk/ckpt_step_229000.pth"
 
     # --- Intervals ---
     val_sanity_check: bool = True
+    val_sanity_check_full_epoch: bool = True
     val_interval: int = 1
+    val_interval_step: int = -1  # deactivate step-based validation
+    val_interval_step_skip_hook: bool = True
+
     log_interval: int = 10
     img_log_interval: int = 500
     save_interval: int = 1000
@@ -52,9 +56,9 @@ class DiffusionTrainConfigs:
     use_tensorboard: bool = True
 
     # --- Classifier-Free Guidance ---
-    text_cond_mask_ratio: float = 0.10
-    text_cond_drop_prob: float = 0.10
-    spk_cond_drop_prob: float = 0.15
+    text_cond_mask_ratio: float = 0.0
+    text_cond_drop_prob: float = 0.20
+    spk_cond_drop_prob: float = 0.40
 
     # --- Checkpoint Management ---
     keep_best_count: int = 3

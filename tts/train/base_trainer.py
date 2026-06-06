@@ -96,7 +96,12 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
         pass
 
     @abstractmethod
-    def train_step(self, batch: Any, step: int) -> tuple[torch.Tensor, Any, Any]:
+    def train_step(
+        self,
+        batch: Any,
+        epoch: int,
+        step: int,
+    ) -> tuple[torch.Tensor, Any, Any]:
         """
         Processes one training batch and returns:
         (weighted_total_loss, metrics, model_output)
@@ -104,16 +109,26 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
         pass
 
     @abstractmethod
-    def validation_step(self, batch: Any, step: int) -> tuple[float, Any, Any]:
+    def validation_step(
+        self,
+        batch: Any,
+        epoch: int,
+        step: int,
+    ) -> tuple[float, Any, Any]:
         """
         Processes one validation batch and returns:
         (weighted_val_loss, metrics, model_output)
         """
         pass
 
+    def on_fit_start(self):
+        """Optional subclass hook called at the very start of run()."""
+        pass
+
     def on_train_step_end(
         self,
         batch: Any,
+        epoch: int,
         step: int,
         is_step_boundary: bool,
         weighted_loss: float,
@@ -125,6 +140,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
 
     def on_validation_epoch_end(
         self,
+        epoch: int,
         step: int,
         avg_val_loss: float,
         avg_metrics: Any,
@@ -157,13 +173,17 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
             print(f"✅  Resuming from Step: {self.global_step} | Epoch: {self.start_epoch}")
 
     def _train_one_step(
-        self, batch: Any, step: int, is_step_boundary: bool
+        self,
+        batch: Any,
+        epoch: int,
+        step: int,
+        is_step_boundary: bool,
     ) -> tuple[float, Any, Any]:
         self.model.train()
         # batch = self.move_batch_to_device(batch)
 
         with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
-            weighted_loss, metrics, output = self.train_step(batch, step)
+            weighted_loss, metrics, output = self.train_step(batch, epoch, step)
             scaled_loss = weighted_loss / self.train_cfg.grad_accumulation_steps
 
         if torch.isnan(scaled_loss):
@@ -228,11 +248,17 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
             if is_step_boundary:
                 self.global_step += 1
 
-            loss, metrics, output = self._train_one_step(batch, self.global_step, is_step_boundary)
+            loss, metrics, output = self._train_one_step(
+                batch,
+                epoch,
+                self.global_step,
+                is_step_boundary,
+            )
             epoch_train_loss += loss
 
             self.on_train_step_end(
                 batch=batch,
+                epoch=epoch,
                 step=self.global_step,
                 is_step_boundary=is_step_boundary,
                 weighted_loss=loss,
@@ -243,19 +269,39 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
             del output
             del batch
 
-            if is_step_boundary and self.global_step % self.train_cfg.save_interval == 0:
-                self.ckpt_manager.save(
-                    self.model,
-                    self.optimizer,
-                    self.scheduler,
-                    self.global_step,
-                    epoch,
-                )
+            if is_step_boundary:
+                if self.global_step % self.train_cfg.save_interval == 0:
+                    self.ckpt_manager.save(
+                        self.model,
+                        self.optimizer,
+                        self.scheduler,
+                        self.global_step,
+                        epoch,
+                    )
+
+                if (
+                    self.train_cfg.val_interval_step > 0
+                    and self.global_step % self.train_cfg.val_interval_step == 0
+                ):
+                    print(f"🔍  [Step {self.global_step}] Running step-based validation...")
+                    val_loss, _ = self.valid_epoch(
+                        epoch,
+                        self.global_step,
+                        skip_epoch_end_hook=self.train_cfg.val_interval_step_skip_hook,
+                    )
+                    print(f"🌟  Step {self.global_step} Validation | Val Loss: {val_loss:.4f}")
+
+                    self.model.train()
 
         return epoch_train_loss / num_batches
 
     @torch.no_grad()
-    def valid_epoch(self, step: int) -> tuple[float, Any]:
+    def valid_epoch(
+        self,
+        epoch: int,
+        step: int,
+        skip_epoch_end_hook: bool = False,
+    ) -> tuple[float, Any]:
         self.model.eval()
 
         total_val_loss = 0.0
@@ -269,7 +315,11 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
         for batch in self.valid_loader:
             batch = self.move_batch_to_device(batch)
             with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
-                weighted_val_loss, metrics, output = self.validation_step(batch, step)
+                weighted_val_loss, metrics, output = self.validation_step(
+                    batch,
+                    epoch=epoch,
+                    step=step,
+                )
 
             metric_values = self._metric_to_dict(metrics)
             if acc_metrics is None:
@@ -290,36 +340,44 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
         avg_metrics_dict = {k: v / num_processed for k, v in acc_metrics.items()}
         avg_metrics = self._dict_to_metric(metrics_template, avg_metrics_dict)
 
-        self.on_validation_epoch_end(
-            step=step,
-            avg_val_loss=avg_val_loss,
-            avg_metrics=avg_metrics,
-            last_batch=last_batch,
-            last_output=last_output,
-        )
+        if not skip_epoch_end_hook:
+            self.on_validation_epoch_end(
+                epoch=epoch,
+                step=step,
+                avg_val_loss=avg_val_loss,
+                avg_metrics=avg_metrics,
+                last_batch=last_batch,
+                last_output=last_output,
+            )
         return avg_val_loss, avg_metrics
 
     @torch.no_grad()
     def _run_validation_sanity_check(self, step: int):
-        self.model.eval()
+        if self.train_cfg.val_sanity_check_full_epoch:
+            print("🔍  Running FULL epoch validation sanity check...")
+            self.valid_epoch(epoch=0, step=step)
+        else:
+            print("🔍  Running single-batch validation sanity check...")
+            self.model.eval()
 
-        try:
-            batch = next(iter(self.valid_loader))
-        except StopIteration as e:
-            raise ValueError("Validation loader is empty.") from e
+            try:
+                batch = next(iter(self.valid_loader))
+            except StopIteration as e:
+                raise ValueError("Validation loader is empty.") from e
 
-        batch = self.move_batch_to_device(batch)
+            batch = self.move_batch_to_device(batch)
 
-        with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
-            val_loss, val_metrics, output = self.validation_step(batch, step)
+            with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
+                val_loss, val_metrics, output = self.validation_step(batch, epoch=0, step=step)
 
-        self.on_validation_epoch_end(
-            step=step,
-            avg_val_loss=val_loss,
-            avg_metrics=val_metrics,
-            last_batch=batch,
-            last_output=output,
-        )
+            self.on_validation_epoch_end(
+                epoch=0,
+                step=step,
+                avg_val_loss=val_loss,
+                avg_metrics=val_metrics,
+                last_batch=batch,
+                last_output=output,
+            )
 
     def move_batch_to_device(self, batch: Any) -> Any:
         return self._move_to_device(batch, self.device)
@@ -361,6 +419,9 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
         # Checkpoint
         self.load_checkpoint()
 
+        # On Fit Start Hook
+        self.on_fit_start()
+
         if self.train_cfg.fp16_run and self.device.type == "cuda":
             print("⚡  AMP (Automatic Mixed Precision) Enabled.")
             self.scaler = torch.amp.GradScaler("cuda")  # pyright: ignore[reportPrivateImportUsage]
@@ -379,7 +440,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
             avg_train_loss = self.train_epoch(epoch)
 
             if epoch % self.train_cfg.val_interval == 0:
-                val_loss, val_metrics = self.valid_epoch(self.global_step)
+                val_loss, val_metrics = self.valid_epoch(epoch, self.global_step)
 
                 epoch_time = time.time() - start_time
                 print("-" * 90)

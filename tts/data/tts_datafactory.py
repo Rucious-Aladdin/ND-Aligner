@@ -10,7 +10,7 @@ from tqdm import tqdm
 from tts.config.stage1.data_config import DataConfig
 
 from .data_parser import LibriTTSParser, LJSpeechParser, VCTKParser
-from .data_types import TTSBatch, TTSItem
+from .data_types import TTSBatch, TTSDatasetInstance, TTSItem
 from .tts_dataset import TTSDataset
 from .quantile_bucket_sampler import QuantileDurationBatchSampler
 
@@ -20,15 +20,27 @@ class TTSCollate:
         self.spec_pad_value = spec_pad_value
 
     def __call__(
-        self, batch: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor, str]]
+        self,
+        batch: list[TTSDatasetInstance],
     ) -> TTSBatch:
-        xs, ys, conds, scripts = zip(*batch)
+        xs = [item.text for item in batch]
+        ys = [item.spec for item in batch]
+        conds = [item.cond for item in batch]
+
+        scripts = [item.script for item in batch]
+        wav_paths = [item.wav_path for item in batch]
+        utt_ids = [item.utt_id for item in batch]
+        spk_ids = [item.spk_id for item in batch]
+        datasets = [item.dataset for item in batch]
 
         x_lengths = torch.tensor([x.size(0) for x in xs], dtype=torch.long)
-        y_lengths = torch.tensor([y.size(1) for y in ys], dtype=torch.long)  # y is (n_mels, T_mel)
+        y_lengths = torch.tensor(
+            [y.size(1) for y in ys],
+            dtype=torch.long,
+        )  # y is (n_mels, T_mel)
 
         x_padded = pad_sequence(
-            list(xs),
+            xs,
             batch_first=True,
             padding_value=0,
         )
@@ -49,7 +61,11 @@ class TTSCollate:
             spec=y_padded,
             spec_lengths=y_lengths,
             cond=cond_batched,
-            scripts=list(scripts),
+            scripts=scripts,
+            wav_paths=wav_paths,
+            utt_ids=utt_ids,
+            spk_ids=spk_ids,
+            datasets=datasets,
         )
 
 

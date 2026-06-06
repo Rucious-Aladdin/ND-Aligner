@@ -3,15 +3,11 @@ from __future__ import annotations
 from typing import Any, NamedTuple, override, cast
 
 import torch
-import torch.nn.functional as F
 
 from .base_model import BaseModel
-from .diffusion.sampler import KarrasSampler
-from .diffusion.score_estimator import KarrasScoreEstimator
-from .diffusion.cond_adapter import ConditionAdapter
+from .diffusion.karras_diffusion import KarrasDiffusionModel
 
 from .monotonic_tts import MonotonicTTSSynthesizer, SynthesizerInferenceOutput
-from .utils.fix_len_compatibility import fix_len_compatibility
 from tts.models.utils.sequence_mask import sequence_mask
 
 
@@ -37,23 +33,13 @@ class KarrasTTSSynthesizer(BaseModel):
     def __init__(
         self,
         syn: MonotonicTTSSynthesizer,
-        estimator: KarrasScoreEstimator,
-        cond_adapter: ConditionAdapter,
+        diffusion_model: KarrasDiffusionModel,
         stochastic_sampling: bool = True,
-        num_unet_downsample: int = 2,
-        unet_out_size: int = 172,
     ) -> None:
         super().__init__()
         self.syn_backbone = syn
-        self.estimator = estimator
+        self.diffusion_model = diffusion_model
         self.stochastic_sampling = stochastic_sampling
-        self.num_unet_downsample = num_unet_downsample
-        self.unet_out_size = unet_out_size
-
-        # Applying Progress Conditioning-Aware
-        self.cond_adapter = cond_adapter
-
-        self.sampler = KarrasSampler(estimator)
 
     @override
     def forward(
@@ -86,15 +72,15 @@ class KarrasTTSSynthesizer(BaseModel):
         with torch.no_grad():
             h_text = cast(
                 torch.Tensor,
-                self.syn_backbone.text_encoder(
-                    text_token_ids=x,
-                    text_mask=text_mask,
+                self.syn_backbone.text_encoder_align(
+                    x=x,
+                    x_mask=text_mask,
                 ),
             )  # (B, C_text, T_text)
 
-            h_spec = self.syn_backbone._encode_speech(  # type: ignore
-                y=y,
-                spec_mask=spec_mask,
+            h_spec = self.syn_backbone.spec_encoder(  # type: ignore
+                x=y,
+                mask=spec_mask,
                 cond=cond,
             )  # (B, C_spec, T_mel)
 
@@ -105,6 +91,7 @@ class KarrasTTSSynthesizer(BaseModel):
                 h_spec=h_spec,
                 spec_mask=spec_mask,
                 compute_hard_path=True,
+                to_hard_aligned_feats=True,
             )
 
             # aligned_feats: (B, T_mel, C) -> (B, C, T_mel)
@@ -114,57 +101,44 @@ class KarrasTTSSynthesizer(BaseModel):
             mask = out.spec_mask.unsqueeze(1)
 
         assert out.hard_gamma is not None
-        aligned_texts = self.cond_adapter(
-            h_text=h_text.detach(),
-            text_mask=text_mask.detach(),
-            aligned_feats=aligned_texts.detach(),
-            spec_mask=mask.detach(),
-            hard_gamma=out.hard_gamma.detach(),
-        )
-
-        aligned_texts_log = aligned_texts.clone().detach()
-
-        y_gt, aligned_texts, mask = self._get_random_segments(
-            y_gt=y,
-            mask=mask,
-            aligned_feats=aligned_texts,
-        )
 
         # >> Diffusion Training Step (Sigma sampling is handled internally)
-        y_noisy, sigma = self.estimator.forward_diffusion(
-            x=y_gt,
+        y_noisy, sigma = self.diffusion_model.forward_diffusion(
+            x=y,
             sigma=None,
         )
 
         # >> Predict Denoised Mel
         # Note: loss_weight calculation is delegated to the training script
 
-        x0_hat = self.estimator.reverse_diffusion(
+        x0_hat = self.diffusion_model(
             x=y_noisy,
             sigma=sigma,
             mask=mask,
             text=aligned_texts,
             spk=cond,
-            guidance_scale=1.0,
             text_cond_drop_prob=text_cond_drop_prob,
             spk_cond_drop_prob=spk_cond_drop_prob,
             text_cond_mask_ratio=text_cond_mask_ratio,
             spk_cond_mask_ratio=spk_cond_mask_ratio,
+            h_text=h_text,
+            hard_gamma=out.hard_gamma,
+            text_mask=text_mask,
         )
 
         # Calculate unweighted squared error (just before loss_weight)
         # Apply mask to ensure padding doesn't contribute to loss
-        mel_loss_unweighted = ((x0_hat - y_gt) ** 2) * mask
+        mel_loss_unweighted = ((x0_hat - y) ** 2) * mask
 
         return DiffusionForwardOutput(
             mel_hat=x0_hat,
-            mel_gt=y_gt,
+            mel_gt=y,
             sigma=sigma,
             mask=mask,
             mel_loss_unweighted=mel_loss_unweighted,
             soft_attn=out.soft_gamma,
             hard_attn=out.hard_gamma,
-            aligned_texts=aligned_texts_log,
+            aligned_texts=aligned_texts,
         )
 
     @override
@@ -188,9 +162,9 @@ class KarrasTTSSynthesizer(BaseModel):
         text_mask = text_mask_bool.unsqueeze(1).to(dtype=x.dtype)
 
         # 1. Get Aligned Features from Stage 1 (detached)
-        h_text = self.syn_backbone.text_encoder(
-            text_token_ids=x,
-            text_mask=text_mask,
+        h_text = self.syn_backbone.text_encoder_align(
+            x=x,
+            x_mask=text_mask,
         )  # (B, C_text, T_text)
 
         out = self.syn_backbone.compute_aligned_feats(
@@ -208,21 +182,8 @@ class KarrasTTSSynthesizer(BaseModel):
         # spec_mask: (B, T_mel) -> (B, 1, T_mel)
         mask = out.spec_mask.unsqueeze(1)
 
-        aligned_texts = self.cond_adapter(
-            h_text=h_text,
-            text_mask=text_mask,
-            aligned_feats=aligned_texts,
-            spec_mask=mask,
-            hard_gamma=out.hard_gamma,
-        )
-
-        aligned_texts, mask, _ = self._pad_length_compatible(
-            aligned_feats=aligned_texts,
-            mask=mask,
-        )
-
         # 2. Stage 2 Diffusion Refinement
-        refined_mel = self.sampler.sample(
+        refined_mel = self.diffusion_model.sample(
             text=aligned_texts,
             mask=mask,
             spk=cond,
@@ -230,6 +191,9 @@ class KarrasTTSSynthesizer(BaseModel):
             guidance_scale=guidance_scale,
             cfg_mode=cfg_mode,
             stochastic=self.stochastic_sampling,
+            h_text=h_text,
+            hard_gamma=out.hard_gamma,
+            text_mask=text_mask,
             **sampler_kwargs,
         )  # (B, n_mels, T_mel)
 
@@ -272,60 +236,3 @@ class KarrasTTSSynthesizer(BaseModel):
 
     def set_sample_mode(self, stochastic: bool = True):
         self.stochastic_sampling = stochastic
-
-    def _get_random_segments(
-        self,
-        y_gt: torch.Tensor,
-        mask: torch.Tensor,
-        aligned_feats: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        out_size = self.unet_out_size
-        batch_size = y_gt.size(0)
-        device = y_gt.device
-
-        lengths = mask.squeeze(1).long().sum(dim=-1)  # (B,)
-        max_offset = (lengths - out_size).clamp(min=0)  # (B,)
-
-        offsets = torch.zeros(batch_size, dtype=torch.long, device=device)
-        for i in range(batch_size):
-            max_off = int(max_offset[i].item())
-            offsets[i] = torch.randint(0, max_off + 1, (1,), device=device) if max_off > 0 else 0
-
-        x_cut = y_gt.new_zeros(batch_size, y_gt.size(1), out_size)
-        text_cut = aligned_feats.new_zeros(batch_size, aligned_feats.size(1), out_size)
-        cut_lengths: list[int] = []
-
-        for i in range(batch_size):
-            seq_len = int(lengths[i].item())
-            start = int(offsets[i].item())
-
-            cut_len = min(seq_len, out_size)
-            end = start + cut_len
-
-            x_cut[i, :, :cut_len] = y_gt[i, :, start:end]
-            text_cut[i, :, :cut_len] = aligned_feats[i, :, start:end]
-            cut_lengths.append(cut_len)
-
-        cut_lengths_t = torch.tensor(cut_lengths, dtype=torch.long, device=device)
-        time_idx = torch.arange(out_size, device=device).unsqueeze(0)
-        mask_cut = (time_idx < cut_lengths_t.unsqueeze(1)).unsqueeze(1).to(mask.dtype)
-
-        return x_cut, text_cut, mask_cut
-
-    def _pad_length_compatible(
-        self,
-        aligned_feats: torch.Tensor,
-        mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, int]:
-        orig_len = aligned_feats.size(-1)
-        compat_len = fix_len_compatibility(orig_len, self.num_unet_downsample)
-
-        if compat_len == orig_len:
-            return aligned_feats, mask, orig_len
-
-        pad_len = compat_len - orig_len
-
-        aligned_feats = F.pad(aligned_feats, (0, pad_len))
-        mask = F.pad(mask, (0, pad_len))
-
-        return aligned_feats, mask, orig_len

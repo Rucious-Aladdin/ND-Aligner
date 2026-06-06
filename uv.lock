@@ -343,6 +343,15 @@ wheels = [
 ]
 
 [[package]]
+name = "fastdtw"
+version = "0.3.4"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/99/43/30f2d8db076f216b15c10db663b46e22d1750b1ebacd7af6e62b83d6ab98/fastdtw-0.3.4.tar.gz", hash = "sha256:2350fa6ec36bcad186eaf81f46eff35181baf04e324f522de8aeb43d0243f64f", size = 133402, upload-time = "2019-10-07T16:02:29.982Z" }
+
+[[package]]
 name = "filelock"
 version = "3.20.0"
 source = { registry = "https://download.pytorch.org/whl/cu128" }
@@ -1448,6 +1457,17 @@ wheels = [
 ]
 
 [[package]]
+name = "pysptk"
+version = "1.0.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "cython" },
+    { name = "decorator" },
+    { name = "scipy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/56/70/0f42ddd75cf4fe1f15dd4165576b3ca9563ef98862ea918a953a5842789d/pysptk-1.0.1.tar.gz", hash = "sha256:78b1c9338bf795a41cdc3ff03fcd4699c401c323f54630bb71a19710078d0b3f", size = 461930, upload-time = "2024-06-29T06:12:14.18Z" }
+
+[[package]]
 name = "pytest"
 version = "9.0.2"
 source = { registry = "https://pypi.org/simple" }
@@ -2099,6 +2119,7 @@ dependencies = [
     { name = "cython" },
     { name = "dacite" },
     { name = "einops" },
+    { name = "fastdtw" },
     { name = "glob2" },
     { name = "huggingface-hub" },
     { name = "ipykernel" },
@@ -2111,6 +2132,7 @@ dependencies = [
     { name = "onnxscript" },
     { name = "pandas" },
     { name = "phonemizer" },
+    { name = "pysptk" },
     { name = "pytest" },
     { name = "scipy" },
     { name = "silero-vad" },
@@ -2129,6 +2151,7 @@ requires-dist = [
     { name = "cython", specifier = ">=3.2.4" },
     { name = "dacite", specifier = ">=1.9.2" },
     { name = "einops", specifier = ">=0.8.2" },
+    { name = "fastdtw", specifier = ">=0.3.4" },
     { name = "glob2", specifier = ">=0.7" },
     { name = "huggingface-hub", specifier = "<1.0" },
     { name = "ipykernel", specifier = ">=7.2.0" },
@@ -2141,6 +2164,7 @@ requires-dist = [
     { name = "onnxscript", specifier = ">=0.6.2" },
     { name = "pandas", specifier = ">=3.0.1" },
     { name = "phonemizer", specifier = ">=3.3.0" },
+    { name = "pysptk", specifier = ">=1.0.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "silero-vad", specifier = ">=6.2.1" },

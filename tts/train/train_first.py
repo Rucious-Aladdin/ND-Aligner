@@ -1,6 +1,8 @@
 import argparse
 from typing import Any, cast, override
 
+import librosa
+from sympy import det
 import torch
 from torch.utils.data import DataLoader
 from tts.tokenizer.text_tokenizer import TextTokenizer
@@ -85,6 +87,21 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
         return model, optimizer, scheduler
 
     @override
+    def on_fit_start(self) -> None:
+        self.data_config: DataConfig
+        if self.data_config.extra_exp.train_time_eval_logging:
+            from tts.logger.eval_logger import Stage1TrainTimeEvalLogger
+
+            print("⏱️ Train-time evaluation logging is ENABLED.")
+            self.train_time_eval_logger = Stage1TrainTimeEvalLogger(
+                base_dir=self.data_config.extra_exp.base_dir,
+                experiment_name=self.data_config.extra_exp.exp_name,
+                exp_variant=self.data_config.extra_exp.exp_variant,
+            )
+        else:
+            self.train_time_eval_logger = None
+
+    @override
     def setup_dataloader(self) -> tuple[DataLoader[Any], DataLoader[Any]]:
         print("📦 Initializing datasets...")
         data_factory = TTSDataFactory(self.data_config)
@@ -137,6 +154,7 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
     def train_step(
         self,
         batch: TTSBatch,
+        epoch: int,
         step: int,
     ) -> tuple[torch.Tensor, LossValues, SynthesizerForwardOutput]:
         self.train_cfg: TrainConfigs
@@ -224,6 +242,8 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
                 cond=cond,
                 compute_viterbi_loss=compute_viterbi_loss,
                 compute_diagonal_loss=compute_diagonal_loss,
+                viterbi_only_training=self.train_cfg.viterbi_only_training,
+                detach_decoder=self.train_cfg.detach_decoder,
             ),
         )
 
@@ -250,6 +270,7 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
     def on_train_step_end(
         self,
         batch: TTSBatch,
+        epoch: int,
         step: int,
         is_step_boundary: bool,
         weighted_loss: float,
@@ -294,6 +315,7 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
     def validation_step(
         self,
         batch: TTSBatch,
+        epoch: int,
         step: int,
     ) -> tuple[float, LossValues, SynthesizerForwardOutput]:
         x, x_len = batch.text, batch.text_lengths
@@ -301,10 +323,6 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
         cond = batch.cond
 
         loss_weights = self._get_loss_weights(step)
-
-        compute_viterbi_loss = (loss_weights.align_viterbi_kl > 0.0) or (
-            loss_weights.align_viterbi_ot > 0.0
-        )
         compute_diagonal_loss = loss_weights.align_diag > 0.0
 
         out = cast(
@@ -315,10 +333,20 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
                 y,
                 y_len,
                 cond,
-                compute_viterbi_loss=compute_viterbi_loss,
+                compute_viterbi_loss=True,
                 compute_diagonal_loss=compute_diagonal_loss,
+                viterbi_only_training=self.train_cfg.viterbi_only_training,
+                detach_decoder=self.train_cfg.detach_decoder,
             ),
         )
+
+        if self.train_time_eval_logger is not None:
+            self.__log_train_time_eval(
+                batch=batch,
+                out=out,
+                epoch=epoch,
+                step=step,
+            )
 
         weighted_val_loss = (
             +(out.dur_loss * loss_weights.dur)
@@ -342,6 +370,7 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
     @override
     def on_validation_epoch_end(
         self,
+        epoch: int,
         step: int,
         avg_val_loss: float,
         avg_metrics: LossValues,
@@ -359,6 +388,15 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
                 step,
                 prefix="Valid",
             )
+
+            if last_batch is not None and last_output is not None:
+                self._log_visuals(
+                    last_batch,
+                    last_output,
+                    step,
+                    prefix="Valid",
+                )
+                self._log_inference(last_batch, step)
 
     def _log_visuals(
         self,
@@ -641,6 +679,193 @@ class Stage1Trainer(BaseTrainer[DataConfig, MonotonicTTSConfigs]):
         completable_to_end = (t_len - 1 - j) <= (s_len - 1 - t)
 
         return reachable_from_start & completable_to_end
+
+    def __load_gt_wavs_from_paths(
+        self,
+        wav_paths: list[str],
+        *,
+        device: torch.device,
+        dtype: torch.dtype,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        wavs: list[torch.Tensor] = []
+        lengths: list[int] = []
+
+        target_sr = self.data_config.audio.sr
+
+        for wav_path in wav_paths:
+            wav_numpy, sr = librosa.load(wav_path, sr=None)
+
+            if sr != target_sr:
+                wav_numpy = librosa.resample(
+                    wav_numpy,
+                    orig_sr=sr,
+                    target_sr=target_sr,
+                )
+
+            wav = torch.from_numpy(wav_numpy).to(dtype=dtype)
+
+            wavs.append(wav)
+            lengths.append(wav.size(0))
+
+        max_len = max(lengths)
+        B = len(wavs)
+
+        wav_padded = torch.zeros(B, max_len, dtype=dtype)
+        wav_mask = torch.zeros(B, max_len, dtype=dtype)
+
+        for b, wav in enumerate(wavs):
+            T = wav.size(0)
+            wav_padded[b, :T] = wav
+            wav_mask[b, :T] = 1.0
+
+        return wav_padded.to(device=device), wav_mask.to(device=device)
+
+    @torch.no_grad()
+    def __log_train_time_eval(
+        self,
+        batch: TTSBatch,
+        out: SynthesizerForwardOutput,
+        epoch: int,
+        step: int,
+    ) -> None:
+        if self.train_time_eval_logger is None:
+            return
+
+        def __lengths_to_mask(
+            lengths: torch.Tensor,
+            max_len: int,
+            *,
+            device: torch.device,
+            dtype: torch.dtype,
+        ) -> torch.Tensor:
+            idx = torch.arange(max_len, device=device).unsqueeze(0)
+            return (idx < lengths.unsqueeze(1)).to(dtype=dtype)
+
+        assert out.hard_gamma is not None
+        assert out.hard_dur is not None
+
+        x, x_lengths = batch.text, batch.text_lengths
+        y, y_lengths = batch.spec, batch.spec_lengths
+        cond = batch.cond
+
+        hop_length = self.data_config.audio.hop_length
+
+        _B, n_mels, T_mel = y.shape
+        T_text = x.size(1)
+
+        # ---------------------------
+        # Masks
+        # ---------------------------
+        spec_mask = __lengths_to_mask(
+            lengths=y_lengths,
+            max_len=T_mel,
+            device=y.device,
+            dtype=y.dtype,
+        )  # (B, T_mel)
+
+        text_mask = __lengths_to_mask(
+            lengths=x_lengths,
+            max_len=T_text,
+            device=x.device,
+            dtype=y.dtype,
+        )  # (B, T_text)
+
+        # GT mel
+        gt_mel = y
+        gt_mel_mask = spec_mask
+
+        gt_wav, gt_wav_mask = self.__load_gt_wavs_from_paths(
+            batch.wav_paths,
+            device=y.device,
+            dtype=y.dtype,
+        )
+
+        # Train-time reconstruction path
+        recon_mel = out.mel_recon.transpose(1, 2).contiguous()  # (B, n_mels, T_mel)
+        recon_mel_mask = spec_mask
+
+        recon_wav = self.model.mel2wav(out.mel_recon)  # (B, 1, T) or (B, T)
+        if recon_wav.dim() == 3 and recon_wav.size(1) == 1:
+            recon_wav = recon_wav.squeeze(1)
+
+        recon_wav_lengths = (y_lengths * hop_length).clamp_max(recon_wav.size(-1))
+        recon_wav_mask = __lengths_to_mask(
+            lengths=recon_wav_lengths,
+            max_len=recon_wav.size(-1),
+            device=recon_wav.device,
+            dtype=recon_wav.dtype,
+        )  # (B, T_recon_wav)
+
+        # Inference path: duration predictor + shallow decoder
+        gen_out = self.model.inference(
+            x=x,
+            x_lengths=x_lengths,
+            cond=cond,
+            noise_scale=0.667,
+        )
+
+        gen_mel = gen_out.mel_hat
+        if gen_mel.dim() == 3 and gen_mel.size(1) != n_mels:
+            gen_mel = gen_mel.transpose(1, 2).contiguous()  # (B, n_mels, T_gen_mel)
+
+        gen_mel_lengths = gen_out.dur.sum(dim=-1).long()  # (B,)
+        gen_mel_mask = __lengths_to_mask(
+            lengths=gen_mel_lengths,
+            max_len=gen_mel.size(-1),
+            device=gen_mel.device,
+            dtype=gen_mel.dtype,
+        )  # (B, T_gen_mel)
+
+        gen_wav = gen_out.wav_hat
+        assert gen_wav is not None
+
+        if gen_wav.dim() == 3 and gen_wav.size(1) == 1:
+            gen_wav = gen_wav.squeeze(1)
+
+        gen_wav_lengths = (gen_mel_lengths * hop_length).clamp_max(gen_wav.size(-1))
+        gen_wav_mask = __lengths_to_mask(
+            lengths=gen_wav_lengths,
+            max_len=gen_wav.size(-1),
+            device=gen_wav.device,
+            dtype=gen_wav.dtype,
+        )  # (B, T_gen_wav)
+
+        # ---------------------------
+        # Durations
+        # ---------------------------
+        viterbi_duration = out.hard_dur
+        posterior_duration = out.dur
+        pred_duration = gen_out.dur
+
+        self.train_time_eval_logger(
+            epoch=epoch,
+            step=step,
+            datasets=batch.datasets,
+            utt_ids=batch.utt_ids,
+            split="valid",
+            speaker_ids=batch.spk_ids,
+            texts=batch.scripts,
+            gt_wav_paths=batch.wav_paths,
+            gt_wav=gt_wav,
+            gt_wav_mask=gt_wav_mask,
+            recon_wav=recon_wav,
+            recon_wav_mask=recon_wav_mask,
+            gen_wav=gen_wav,
+            gen_wav_mask=gen_wav_mask,
+            gt_mel=gt_mel,
+            gt_mel_mask=gt_mel_mask,
+            recon_mel=recon_mel,
+            recon_mel_mask=recon_mel_mask,
+            gen_mel=gen_mel,
+            gen_mel_mask=gen_mel_mask,
+            viterbi_alignment=out.hard_gamma,
+            posterior_attention=out.attn,
+            spec_mask=spec_mask,
+            text_mask=text_mask,
+            viterbi_duration=viterbi_duration,
+            posterior_duration=posterior_duration,
+            pred_duration=pred_duration,
+        )
 
 
 def main():

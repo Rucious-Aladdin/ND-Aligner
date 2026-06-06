@@ -46,6 +46,9 @@ class LJSpeechParser(BaseDatasetParser):
                         audio_path=audio_path,
                         spk_path=spk_path,
                         text=text,
+                        utt_id=wav_id,
+                        spk_id="LJ",
+                        dataset="ljspeech",
                     )
                 )
         return items
@@ -65,7 +68,7 @@ class VCTKParser(BaseDatasetParser):
             return items
 
         # Recursively find all wav files
-        wav_paths = glob.glob(os.path.join(wav_root, "**/*.wav"), recursive=True)
+        wav_paths = sorted(glob.glob(os.path.join(wav_root, "**/*.wav"), recursive=True))
 
         for audio_path in wav_paths:
             file_name = os.path.basename(audio_path)
@@ -76,6 +79,9 @@ class VCTKParser(BaseDatasetParser):
             rel_path = os.path.relpath(audio_path, wav_root)
             base_rel_path = os.path.splitext(rel_path)[0]
             text_path = os.path.join(txt_root, base_rel_path + ".txt")
+
+            spk_id = rel_path.split(os.sep)[0]
+            utt_id = os.path.splitext(os.path.basename(audio_path))[0].replace("_mic1", "")
 
             # VCTK common case: audio has _mic1, but text doesn't
             if not os.path.exists(text_path):
@@ -99,6 +105,9 @@ class VCTKParser(BaseDatasetParser):
                     audio_path=audio_path,
                     spk_path=spk_path,
                     text=text,
+                    utt_id=utt_id,
+                    spk_id=spk_id,
+                    dataset="vctk",
                 )
             )
         return items
@@ -111,7 +120,6 @@ class LibriTTSParser(BaseDatasetParser):
     @override
     def parse(self) -> list[TTSItem]:
         items = []
-        # Support common clean subsets
         subsets = ["train-clean-100", "train-clean-360"]
 
         for subset in subsets:
@@ -119,7 +127,12 @@ class LibriTTSParser(BaseDatasetParser):
             if not os.path.exists(subset_dir):
                 continue
 
-            wav_paths = glob.glob(os.path.join(subset_dir, "**/*.wav"), recursive=True)
+            dataset_name = {
+                "train-clean-100": "libri-100",
+                "train-clean-360": "libri-360",
+            }[subset]
+
+            wav_paths = sorted(glob.glob(os.path.join(subset_dir, "**/*.wav"), recursive=True))
             for audio_path in wav_paths:
                 base_path = os.path.splitext(audio_path)[0]
                 text_path = base_path + ".normalized.txt"
@@ -134,11 +147,20 @@ class LibriTTSParser(BaseDatasetParser):
                 if not os.path.exists(spk_path):
                     spk_path = ""
 
+                rel_path = os.path.relpath(audio_path, subset_dir)
+                parts = rel_path.split(os.sep)
+
+                spk_id = parts[0] if len(parts) > 0 else ""
+                utt_id = os.path.splitext(os.path.basename(audio_path))[0]
+
                 items.append(
                     TTSItem(
                         audio_path=audio_path,
                         spk_path=spk_path,
                         text=text,
+                        utt_id=utt_id,
+                        spk_id=spk_id,
+                        dataset=dataset_name,
                     )
                 )
         return items

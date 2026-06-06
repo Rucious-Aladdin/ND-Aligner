@@ -3,11 +3,12 @@ from typing import NamedTuple, override
 import torch
 import torch.nn.functional as F
 
-from tts.models.modules.spec_decoder import SpecDecoder
+# from tts.models.modules.spec_decoder import SpecDecoder
+from tts.models.modules.conformer_decoder import ConformerSpecDecoder
 from tts.models.modules.duration_predictor import StochasticDurationPredictor
 from tts.models.modules.text_encoder import TextEncoder
 from tts.models.modules.hifigan_vocoder import Generator
-from tts.models.modules.monotonic_aligner import MonotonicCRFAligner
+from tts.models.modules.crf_aligner import MonotonicCRFAligner
 from tts.models.modules.spec_encoder import SpecEncoder
 from tts.models.modules.spk_encoder import SpeakerEncoder
 from tts.models.utils.sequence_mask import sequence_mask
@@ -69,25 +70,22 @@ class AlignedFeaturesOutput(NamedTuple):
     dur: torch.Tensor
     spec_mask: torch.Tensor
     y_lengths: torch.Tensor
-
     h_text: torch.Tensor
 
-    # training-only
-    h_spec: torch.Tensor | None = None
+    soft_gamma: torch.Tensor | None
+    log_alpha: torch.Tensor | None
+    log_beta: torch.Tensor | None
+    log_gamma: torch.Tensor | None
+    raw_log_z: torch.Tensor | None
+    norm_log_z: torch.Tensor | None
+    raw_unary: torch.Tensor | None
+    masked_raw_unary: torch.Tensor | None
+    log_b: torch.Tensor | None
 
-    soft_gamma: torch.Tensor | None = None
+    h_spec: torch.Tensor | None = None  # training-only
+
     hard_gamma: torch.Tensor | None = None
     hard_dur: torch.Tensor | None = None
-
-    log_alpha: torch.Tensor | None = None
-    log_beta: torch.Tensor | None = None
-    log_gamma: torch.Tensor | None = None
-    raw_log_z: torch.Tensor | None = None
-    norm_log_z: torch.Tensor | None = None
-
-    raw_unary: torch.Tensor | None = None
-    masked_raw_unary: torch.Tensor | None = None
-    log_b: torch.Tensor | None = None
 
     viterbi_path: torch.Tensor | None = None
     viterbi_logp: torch.Tensor | None = None
@@ -108,9 +106,10 @@ class MonotonicTTSSynthesizer(BaseModel):
 
     def __init__(
         self,
-        text_encoder: TextEncoder,
+        text_encoder_align: TextEncoder,
+        text_encoder_gen: TextEncoder,
         dur_predictor: StochasticDurationPredictor,
-        spec_decoder: SpecDecoder,
+        spec_decoder: ConformerSpecDecoder,
         aligner: MonotonicCRFAligner | None = None,
         spec_encoder: SpecEncoder | None = None,
         vocoder: Generator | None = None,
@@ -118,15 +117,18 @@ class MonotonicTTSSynthesizer(BaseModel):
     ):
         super().__init__()
 
-        self.text_encoder = text_encoder
+        self.text_encoder_align = text_encoder_align
+        self.text_encoder_gen = text_encoder_gen
         self.crf_aligner = aligner
 
         self.spec_encoder = spec_encoder
         self.spec_decoder = spec_decoder
 
         self.dur_predictor = dur_predictor
-        self.vocoder = vocoder
+
+        # External Modules
         self.speaker_encoder = speaker_encoder
+        self.vocoder = vocoder
 
     @override
     def forward(
@@ -138,6 +140,8 @@ class MonotonicTTSSynthesizer(BaseModel):
         cond: torch.Tensor,  # (B, D_cond)
         compute_viterbi_loss: bool = False,
         compute_diagonal_loss: bool = False,
+        viterbi_only_training: bool = False,
+        detach_decoder: bool = False,
     ) -> SynthesizerForwardOutput:
         assert self.spec_encoder is not None
         assert self.crf_aligner is not None
@@ -150,10 +154,8 @@ class MonotonicTTSSynthesizer(BaseModel):
         idx = torch.arange(T_mel, device=y.device).unsqueeze(0)
         spec_mask = (idx < y_lengths.unsqueeze(1)).to(dtype=y.dtype)
 
-        # ---------------------------
-        # 1. Text / speech representations
-        # ---------------------------
-        h_text = self.text_encoder(
+        # 1. Text / speech representations (for alignment only)
+        h_text_align = self.text_encoder_align(
             x=x,
             x_mask=text_mask,
         )  # (B, C_text, T_text)
@@ -164,56 +166,45 @@ class MonotonicTTSSynthesizer(BaseModel):
             cond=cond,
         )  # (B, C_spec, T_mel)
 
-        # ---------------------------
         # 2. Pairwise CRF alignment
-        # ---------------------------
         out = self.compute_aligned_feats(
-            h_text=h_text,
+            h_text=h_text_align,
             text_mask=text_mask,
             cond=cond,
             h_spec=h_spec,
             spec_mask=spec_mask,
             noise_scale=0.667,
             compute_hard_path=compute_viterbi_loss,
-            to_hard_aligned_feats=False,
+            to_hard_aligned_feats=viterbi_only_training,
         )
 
-        assert out.soft_gamma is not None
-        assert out.h_spec is not None
-
-        assert out.log_alpha is not None
-        assert out.log_beta is not None
-        assert out.log_gamma is not None
-        assert out.raw_log_z is not None
-        assert out.norm_log_z is not None
-
-        assert out.raw_unary is not None
-        assert out.masked_raw_unary is not None
-        assert out.log_b is not None
-
-        # ---------------------------
         # 3. Text-aligned reconstruction loss
-        # ---------------------------
-        y_t = y.transpose(1, 2)  # (B, T_mel, n_mels)
+        h_text_gen = self.text_encoder_gen(
+            x=x,
+            x_mask=text_mask,
+        )  # (B, C_text, T_text)
 
+        viterbi_gen_learning = compute_viterbi_loss or viterbi_only_training
+        gen_attn = out.hard_gamma if viterbi_gen_learning else out.soft_gamma
+        assert gen_attn is not None
+
+        gen_feats = torch.bmm(gen_attn, h_text_gen.transpose(1, 2))
         mel_recon = self.spec_decoder(
-            out.aligned_feats,
-            cond,
-            spec_mask,
+            x=gen_feats.detach() if detach_decoder else gen_feats,
+            spec_mask=spec_mask,
+            cond=cond,
         )
 
         mel_recon_loss = F.l1_loss(
-            mel_recon * spec_mask.unsqueeze(-1),
-            y_t * spec_mask.unsqueeze(-1),
+            mel_recon * spec_mask.unsqueeze(1),
+            y * spec_mask.unsqueeze(1),
             reduction="sum",
         )
         mel_recon_loss = mel_recon_loss / (spec_mask.sum() * n_mels).clamp_min(1.0)
 
-        # ---------------------------
         # 4. Duration loss
-        # ---------------------------
         loss_dur = self.dur_predictor(
-            x=out.h_text,
+            x=h_text_align,
             x_mask=text_mask,
             dur_target=out.dur.unsqueeze(1).float(),
             cond=cond.unsqueeze(-1),
@@ -221,17 +212,14 @@ class MonotonicTTSSynthesizer(BaseModel):
         )
         dur_loss = loss_dur.sum() / text_mask.sum().clamp_min(1.0)
 
-        # ---------------------------
         # 5. Forward alignment energy loss
-        # ---------------------------
-        # With locally normalized / pairwise unary potentials, this is not a
-        # literal acoustic HMM negative log-likelihood. It is a forward-sum
+        # this is not a literal acoustic HMM negative log-likelihood. It is a forward-sum
         # energy objective over valid monotone paths.
+        assert out.norm_log_z is not None
         align_forward_loss = -out.norm_log_z.mean()
 
-        # ---------------------------
-        # 6. Optional diagonal prior loss
-        # ---------------------------
+        # 6. Diagonal prior loss
+        assert out.soft_gamma is not None
         align_diag_loss = torch.zeros((), device=x.device)
 
         if compute_diagonal_loss:
@@ -242,9 +230,8 @@ class MonotonicTTSSynthesizer(BaseModel):
                 omega=1.0,
             )
 
-        # ---------------------------
         # 7. Optional Viterbi hardening losses
-        # ---------------------------
+        assert out.log_gamma is not None
         align_viterbi_kl_loss = torch.zeros((), device=x.device)
         align_viterbi_ot_loss = torch.zeros((), device=x.device)
 
@@ -261,6 +248,14 @@ class MonotonicTTSSynthesizer(BaseModel):
                 text_mask=text_mask_bool,
                 spec_mask=out.spec_mask,
             )
+
+        assert out.h_spec is not None
+        assert out.log_alpha is not None
+        assert out.log_beta is not None
+        assert out.raw_log_z is not None
+        assert out.raw_unary is not None
+        assert out.masked_raw_unary is not None
+        assert out.log_b is not None
 
         return SynthesizerForwardOutput(
             dur=out.dur,
@@ -279,7 +274,7 @@ class MonotonicTTSSynthesizer(BaseModel):
             log_b=out.log_b,
             viterbi_path=out.viterbi_path,
             viterbi_logp=out.viterbi_logp,
-            mel_recon=mel_recon,
+            mel_recon=mel_recon.transpose(1, 2),
             dur_loss=dur_loss,
             mel_recon_loss=mel_recon_loss,
             align_forward_loss=align_forward_loss,
@@ -298,15 +293,17 @@ class MonotonicTTSSynthesizer(BaseModel):
         noise_scale: float = 0.667,
     ) -> SynthesizerInferenceOutput:
         text_mask_bool = sequence_mask(x_lengths, x.size(1))
-        text_mask = text_mask_bool.unsqueeze(1).float()
+        text_mask = text_mask_bool.unsqueeze(1).to(dtype=cond.dtype)
 
-        h_text = self.text_encoder(
-            text_token_ids=x,
-            text_mask=text_mask,
-        )
+        # 1. Alignment-side text representation.
+        #    This is used only for duration prediction / alignment construction.
+        h_text_align = self.text_encoder_align(
+            x=x,
+            x_mask=text_mask,
+        )  # (B, C_text, T_text)
 
         out = self.compute_aligned_feats(
-            h_text=h_text,
+            h_text=h_text_align,
             text_mask=text_mask,
             cond=cond,
             h_spec=None,
@@ -317,11 +314,27 @@ class MonotonicTTSSynthesizer(BaseModel):
         )
 
         assert out.hard_gamma is not None
+        assert out.spec_mask is not None
+
+        # 2. Generation-side text representation.
+        #    Decoder should not consume aligner-side aligned_feats.
+        h_text_gen = self.text_encoder_gen(
+            x=x,
+            x_mask=text_mask,
+        )  # (B, C_text, T_text)
+
+        # out.hard_gamma: (B, T_mel, T_text)
+        # h_text_gen.T:   (B, T_text, C_text)
+        # gen_feats:      (B, T_mel, C_text)
+        gen_feats = torch.bmm(
+            out.hard_gamma,
+            h_text_gen.transpose(1, 2),
+        )
 
         mel_hat = self.spec_decoder(
-            out.aligned_feats,
-            cond,
-            out.spec_mask,
+            x=gen_feats,
+            spec_mask=out.spec_mask,
+            cond=cond,
         )
 
         wav_hat = None
@@ -331,7 +344,7 @@ class MonotonicTTSSynthesizer(BaseModel):
         return SynthesizerInferenceOutput(
             dur=out.dur,
             attn=out.hard_gamma,
-            mel_hat=mel_hat,
+            mel_hat=mel_hat.transpose(1, 2),
             wav_hat=wav_hat,
         )
 
@@ -364,10 +377,8 @@ class MonotonicTTSSynthesizer(BaseModel):
         text_mask = text_mask.to(device=device, dtype=dtype)
         text_mask_bool = text_mask.bool()
 
-        log_alpha = log_beta = log_gamma = raw_log_z = norm_log_z = None
-        raw_unary = masked_raw_unary = log_b = None
         viterbi_path = viterbi_logp = None
-        soft_gamma = hard_attn = hard_dur = None
+        hard_attn = hard_dur = None
 
         # ------------------------------------------------------------------
         # Training path: use speech encoder outputs and pairwise CRF aligner.
@@ -431,20 +442,16 @@ class MonotonicTTSSynthesizer(BaseModel):
                     return_hard=False,
                 )
 
-            dur = soft_dur
-
             if to_hard_aligned_feats:
                 assert hard_attn is not None
+                assert hard_dur is not None
                 text_attn = hard_attn
+                dur = hard_dur
             else:
-                assert soft_gamma is not None
                 text_attn = soft_gamma
+                dur = soft_dur
 
-            aligned_feats = torch.bmm(
-                text_attn,
-                # text_attn.detach(),
-                h_text.transpose(1, 2),
-            )
+            aligned_feats = torch.bmm(text_attn, h_text.transpose(1, 2))
             aligned_feats = aligned_feats * spec_mask_2d.unsqueeze(-1)
 
             spec_mask_out = spec_mask_2d
@@ -453,6 +460,10 @@ class MonotonicTTSSynthesizer(BaseModel):
         # Inference path: use duration predictor.
         # ------------------------------------------------------------------
         else:
+            soft_gamma = log_gamma = None
+            log_alpha = log_beta = None
+            raw_log_z = norm_log_z = None
+            raw_unary = masked_raw_unary = log_b = None
             logw = self.dur_predictor(
                 x=h_text,
                 x_mask=text_mask,
@@ -523,8 +534,6 @@ class MonotonicTTSSynthesizer(BaseModel):
             h_text=h_text,
             h_spec=h_spec,
             soft_gamma=soft_gamma,
-            hard_gamma=hard_attn,
-            hard_dur=hard_dur,
             log_alpha=log_alpha,
             log_beta=log_beta,
             log_gamma=log_gamma,
@@ -533,6 +542,8 @@ class MonotonicTTSSynthesizer(BaseModel):
             raw_unary=raw_unary,
             masked_raw_unary=masked_raw_unary,
             log_b=log_b,
+            hard_gamma=hard_attn,
+            hard_dur=hard_dur,
             viterbi_path=viterbi_path,
             viterbi_logp=viterbi_logp,
         )

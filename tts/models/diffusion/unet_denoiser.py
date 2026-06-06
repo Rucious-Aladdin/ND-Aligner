@@ -1,53 +1,13 @@
-from __future__ import annotations
-
-import abc
-from abc import abstractmethod
 from typing import override
 
 import torch
 import torch.nn as nn
 
-from .unet_backbone import UnetBackbone
+from .submodules.unet_backbone import UnetBackbone
+from .abc.denoiser import Denoiser
 
 
-class DenoiserNetwork(nn.Module, abc.ABC):
-    """
-    Abstract base class for denoiser networks used in diffusion.
-    """
-
-    @override
-    @abstractmethod
-    def forward(
-        self,
-        x: torch.Tensor,
-        mask: torch.Tensor,
-        text: torch.Tensor,
-        t: torch.Tensor | float,
-        spk: torch.Tensor,
-        *,
-        text_cond_drop_prob: float = 0.0,
-        spk_cond_drop_prob: float = 0.0,
-        text_cond_mask_ratio: float = 0.0,
-        spk_cond_mask_ratio: float = 0.0,
-    ) -> torch.Tensor:
-        raise NotImplementedError()
-
-    @abstractmethod
-    def forward_with_cfg(
-        self,
-        x: torch.Tensor,
-        mask: torch.Tensor,
-        text: torch.Tensor,
-        t: torch.Tensor | float,
-        spk: torch.Tensor,
-        *,
-        guidance_scale: float | tuple[float, float] = 1.0,
-        cfg_mode: str = "base",
-    ) -> torch.Tensor:
-        raise NotImplementedError()
-
-
-class MelDenoiserNetwork(DenoiserNetwork):
+class UnetDenoiserNetwork(Denoiser):
     """
     Wrapper around UnetBackbone for mel-space denoising.
 
@@ -131,7 +91,9 @@ class MelDenoiserNetwork(DenoiserNetwork):
 
             # Continuous Region Masking
             # Pass mask to handle varying sequence lengths in the batch
-            text = self._mask_continuous_region(text, text_cond_mask_ratio, self.null_text, mask=mask)
+            text = self._mask_continuous_region(
+                text, text_cond_mask_ratio, self.null_text, mask=mask
+            )
             spk = self._mask_continuous_region(spk, spk_cond_mask_ratio, self.null_spk)
 
         text = self.text_proj(text * mask)
@@ -312,7 +274,9 @@ class MelDenoiserNetwork(DenoiserNetwork):
 
             # Create boolean mask for the regions to drop
             indices = torch.arange(T, device=x.device).view(1, T)  # (1, T)
-            m = (indices >= start_indices.view(B, 1)) & (indices < (start_indices + mask_lens).view(B, 1))
+            m = (indices >= start_indices.view(B, 1)) & (
+                indices < (start_indices + mask_lens).view(B, 1)
+            )
             m = m.unsqueeze(1)  # (B, 1, T)
 
             return torch.where(m, null_val.view(1, D, 1), x)

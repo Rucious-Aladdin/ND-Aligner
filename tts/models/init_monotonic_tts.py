@@ -1,12 +1,15 @@
 import dataclasses
 
 from ..config.stage1.model_config import MonotonicTTSConfigs
-from .modules.spec_decoder import SpecDecoder
+
+# from .modules.spec_decoder import SpecDecoder
 from .modules.duration_predictor import StochasticDurationPredictor
 from .modules.text_encoder import TextEncoder
 from .modules.hifigan_vocoder import Generator
-from .modules.monotonic_aligner import MonotonicCRFAligner
+from .modules.crf_aligner import MonotonicCRFAligner
+
 from .modules.spec_encoder import SpecEncoder
+from .modules.conformer_decoder import ConformerSpecDecoder
 from .modules.spk_encoder import SpeakerEncoder
 from .monotonic_tts import MonotonicTTSSynthesizer
 
@@ -43,12 +46,14 @@ def init_monotonic_tts(
     else:
         speaker_encoder = None
 
-    text_encoder = TextEncoder(**dataclasses.asdict(config.txt_enc))
-    spec_decoder = SpecDecoder(**dataclasses.asdict(config.spec_dec))
+    text_encoder_align = TextEncoder(**dataclasses.asdict(config.txt_enc))
+    text_encoder_gen = TextEncoder(**dataclasses.asdict(config.txt_enc))
+    spec_decoder = ConformerSpecDecoder(**dataclasses.asdict(config.spec_dec))
     dur_predictor = StochasticDurationPredictor(**dataclasses.asdict(config.dur_predictor))
 
     model = MonotonicTTSSynthesizer(
-        text_encoder=text_encoder,
+        text_encoder_align=text_encoder_align,
+        text_encoder_gen=text_encoder_gen,
         dur_predictor=dur_predictor,
         spec_encoder=spec_encoder,
         aligner=aligner,

@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 
 from tts.config.stage1.data_config import DataConfig as Stage1DataConfig
 from tts.config.stage1.model_config import MonotonicTTSConfigs
-from tts.config.stage2.data_config import Stage2DataConfig
+from tts.config.stage2.data_config import Stage2DataConfig, DiffusionTrainConfigs
 from tts.config.stage2.model_config import DiffusionTTSConfigs
 from tts.config.utils.io import load_config
 from tts.data.data_types import TTSBatch
@@ -29,6 +29,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
     def __init__(self, *args: Any, **kwargs: Any):
         super().__init__(*args, **kwargs)
         self.model: KarrasTTSSynthesizer | None = None
+        self.train_cfg: DiffusionTrainConfigs
 
     @override
     def setup_model(
@@ -47,7 +48,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
             param.requires_grad = False
 
         # Ensure Stage 2 (Estimator/Denoiser) is trainable
-        for param in model.estimator.parameters():
+        for param in model.diffusion_model.parameters():
             param.requires_grad = True
 
         model.train()
@@ -88,6 +89,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
     def train_step(
         self,
         batch: TTSBatch,
+        epoch: int,
         step: int,
     ) -> tuple[torch.Tensor, DiffusionLossValues, DiffusionForwardOutput]:
         assert self.model is not None
@@ -112,7 +114,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
 
         # >> EDM Preconditioning Loss: lambda(sigma) * ||D(x+n) - x||^2
         # mel_loss_unweighted is (B, n_mels, T_mel) squared error, already masked.
-        loss_weight = self.model.estimator.get_loss_weight(out.sigma).view(-1, 1, 1)
+        loss_weight = self.model.diffusion_model.get_loss_weight(out.sigma).view(-1, 1, 1)
 
         # Calculate weighted MSE loss normalized by valid frames
         # Use out.mask.sum() * n_mels for proper normalization across valid regions
@@ -131,6 +133,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
     def on_train_step_end(
         self,
         batch: TTSBatch,
+        epoch: int,
         step: int,
         is_step_boundary: bool,
         weighted_loss: float,
@@ -182,8 +185,8 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
                 x=batch.text[:1],
                 x_lengths=batch.text_lengths[:1],
                 cond=batch.cond[:1],
-                n_steps=12,
-                guidance_scale=(3.5, 1.5),
+                n_steps=35,
+                guidance_scale=(5.0, 3.0),
                 cfg_mode="sequential",
             )
             # Note: inference returns (B, T_mel, n_mels)
@@ -240,6 +243,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
     def validation_step(
         self,
         batch: TTSBatch,
+        epoch: int,
         step: int,
     ) -> tuple[float, DiffusionLossValues, DiffusionForwardOutput]:
         assert self.model is not None
@@ -257,7 +261,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
             ),
         )
 
-        loss_weight = self.model.estimator.get_loss_weight(out.sigma).view(-1, 1, 1)
+        loss_weight = self.model.diffusion_model.get_loss_weight(out.sigma).view(-1, 1, 1)
         n_mels = batch.spec.size(1)
         weighted_loss_sum = (loss_weight * out.mel_loss_unweighted).sum()
         val_loss = weighted_loss_sum / (out.mask.sum() * n_mels + 1e-8)
@@ -272,6 +276,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
     @override
     def on_validation_epoch_end(
         self,
+        epoch: int,
         step: int,
         avg_val_loss: float,
         avg_metrics: DiffusionLossValues,
