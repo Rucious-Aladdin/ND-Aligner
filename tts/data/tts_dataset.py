@@ -7,11 +7,11 @@ import torch
 from torch.utils.data import Dataset
 
 from tts.audio.mel_spectrogram import MelSpecExtractor
-from tts.config.stage1.data_config import DataConfig
-from tts.config.stage1.model_config import SPK_COND_DIM
+from tts.config.ndaligner.data_config import DataConfig
+from tts.config.ndaligner.model_config import SPK_COND_DIM
 from tts.tokenizer.text_tokenizer import TextTokenizer
 
-from .data_types import TTSItem, TTSDatasetInstance
+from .data_types import TTSDatasetInstance, TTSItem
 
 
 class TTSDataset(Dataset[TTSDatasetInstance]):
@@ -28,7 +28,15 @@ class TTSDataset(Dataset[TTSDatasetInstance]):
             os.makedirs(self.cache_dir, exist_ok=True)
 
         self.tokenizer = TextTokenizer()
-        self.mel_extractor = MelSpecExtractor(config=config.audio)
+        self.mel_extractor = MelSpecExtractor(
+            sr=config.audio.sr,
+            n_mels=config.audio.n_mels,
+            n_fft=config.audio.n_fft,
+            hop_length=config.audio.hop_length,
+            win_length=config.audio.win_length,
+            fmin=config.audio.f_min,
+            fmax=config.audio.f_max,
+        )
 
     def __len__(self) -> int:
         return len(self.items)

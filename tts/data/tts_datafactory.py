@@ -7,12 +7,12 @@ from torch.nn.utils.rnn import pad_sequence
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from tts.config.stage1.data_config import DataConfig
+from tts.config.ndaligner.data_config import DataConfig
 
 from .data_parser import LibriTTSParser, LJSpeechParser, VCTKParser
 from .data_types import TTSBatch, TTSDatasetInstance, TTSItem
-from .tts_dataset import TTSDataset
 from .quantile_bucket_sampler import QuantileDurationBatchSampler
+from .tts_dataset import TTSDataset
 
 
 class TTSCollate:
@@ -75,78 +75,133 @@ class TTSDataFactory:
         self.dataset_cfg = config.dataset
         self.train_cfg = config.train
 
-        # 1. Parse all selected datasets
-        all_items: list[TTSItem] = []
+        # 1. Parse all selected datasets.
+        all_train_items: list[TTSItem] = []
+        all_test_items: list[TTSItem] = []
+
         for ds_name in self.dataset_cfg.dataset_list:
             ds_name = ds_name.lower()
+
             if ds_name == "ljspeech":
-                parser = LJSpeechParser(self.dataset_cfg.ljspeech_root)
+                parser = LJSpeechParser(
+                    root_dir=self.dataset_cfg.ljspeech_root,
+                    num_test_samples=self.dataset_cfg.ljspeech_num_test_samples,
+                    test_split_seed=self.dataset_cfg.seed,
+                )
             elif ds_name == "vctk":
-                parser = VCTKParser(self.dataset_cfg.vctk_root)
+                parser = VCTKParser(
+                    root_dir=self.dataset_cfg.vctk_root,
+                    test_speaker_ids=self.dataset_cfg.vctk_test_speakers,
+                )
             elif ds_name == "libritts":
                 parser = LibriTTSParser(self.dataset_cfg.libritts_root)
             else:
                 print(f"[Warning] Unknown dataset name: {ds_name}. Skipping.")
                 continue
 
-            items = parser.parse()
-            print(f"[Info] Parsed {len(items)} items from {ds_name}")
-            all_items.extend(items)
+            parsed = parser.parse()
 
-        if not all_items:
-            raise ValueError("No data items found. Check your dataset_list and root paths.")
+            train_items = parsed.train_items
+            test_items = parsed.test_items or []
 
-        # 1.5 Filter by duration
+            print(
+                f"[Info] Parsed {len(train_items)} train items "
+                + f"and {len(test_items)} test items from {ds_name}"
+            )
+
+            all_train_items.extend(train_items)
+            all_test_items.extend(test_items)
+
+        if not all_train_items:
+            raise ValueError("No train data items found. Check your dataset_list and root paths.")
+
+        # 1.5 Filter train/test items by duration.
         print(
             f"[Info] Filtering items by duration "
             + f"({self.dataset_cfg.min_duration_sec}s ~ {self.dataset_cfg.max_duration_sec}s)..."
         )
 
+        train_pairs = self._filter_items_by_duration(
+            all_train_items,
+            desc="Filtering train data",
+        )
+
+        test_pairs = self._filter_items_by_duration(
+            all_test_items,
+            desc="Filtering test data",
+        )
+
+        if not train_pairs:
+            raise ValueError("No train items left after duration filtering.")
+
+        # 2. Shuffle train pool and split train/valid.
+        rng = random.Random(self.dataset_cfg.seed)
+        rng.shuffle(train_pairs)
+
+        num_total = len(train_pairs)
+        num_valid = int(num_total * self.dataset_cfg.val_ratio)
+
+        valid_pairs = train_pairs[:num_valid]
+        train_pairs = train_pairs[num_valid:]
+
+        self.train_items = [item for item, _duration in train_pairs]
+        self.valid_items = [item for item, _duration in valid_pairs]
+        self.test_items = [item for item, _duration in test_pairs]
+
+        self.train_durations = [duration for _item, duration in train_pairs]
+        self.valid_durations = [duration for _item, duration in valid_pairs]
+        self.test_durations = [duration for _item, duration in test_pairs]
+
+        print(
+            f"[Info] Data split complete: "
+            + f"{len(self.train_items)} train, "
+            + f"{len(self.valid_items)} valid, "
+            + f"{len(self.test_items)} test"
+        )
+
+        if not self.valid_items:
+            print("[Warning] No validation items found. Check val_ratio.")
+
+        if not self.test_items:
+            print("[Warning] No test items found.")
+
+        # 3. Create datasets.
+        self.train_dataset = TTSDataset(self.train_items, config)
+        self.valid_dataset = TTSDataset(self.valid_items, config)
+        self.test_dataset = TTSDataset(self.test_items, config)
+
+        self.collate_fn = TTSCollate(self.train_dataset.spec_pad_value)
+
+    def _filter_items_by_duration(
+        self,
+        items: list[TTSItem],
+        desc: str,
+    ) -> list[tuple[TTSItem, float]]:
         filtered_pairs: list[tuple[TTSItem, float]] = []
 
-        for item in tqdm(all_items, desc="Filtering data"):
+        if not items:
+            return filtered_pairs
+
+        for item in tqdm(items, desc=desc):
             try:
                 duration = librosa.get_duration(path=item.audio_path)
+
                 if (
                     self.dataset_cfg.min_duration_sec
                     <= duration
                     <= self.dataset_cfg.max_duration_sec
                 ):
                     filtered_pairs.append((item, float(duration)))
+
             except Exception as e:
                 print(f"[Warning] Error checking duration for {item.audio_path}: {e}. Skipping.")
 
         print(
-            f"[Info] Filtered {len(all_items) - len(filtered_pairs)} items. "
+            f"[Info] {desc}: filtered {len(items) - len(filtered_pairs)} items. "
             + f"Remaining: {len(filtered_pairs)}"
         )
 
-        # 2. Shuffle and Split
-        random.seed(self.dataset_cfg.seed)
-        random.shuffle(filtered_pairs)
-
-        num_total = len(filtered_pairs)
-        num_valid = int(num_total * self.dataset_cfg.val_ratio)
-
-        valid_pairs = filtered_pairs[:num_valid]
-        train_pairs = filtered_pairs[num_valid:]
-
-        self.valid_items = [item for item, _duration in valid_pairs]
-        self.train_items = [item for item, _duration in train_pairs]
-
-        self.valid_durations = [duration for _item, duration in valid_pairs]
-        self.train_durations = [duration for _item, duration in train_pairs]
-
-        print(
-            f"[Info] Data split complete: "
-            + f"{len(self.train_items)} train, {len(self.valid_items)} valid"
-        )
-
-        # 3. Create Datasets
-        self.train_dataset = TTSDataset(self.train_items, config)
-        self.valid_dataset = TTSDataset(self.valid_items, config)
-
-        self.collate_fn = TTSCollate(self.train_dataset.spec_pad_value)
+        return filtered_pairs
 
     @property
     def train_loader(self) -> DataLoader[Any]:
@@ -171,6 +226,18 @@ class TTSDataFactory:
     def valid_loader(self) -> DataLoader[Any]:
         return DataLoader(
             self.valid_dataset,
+            batch_size=self.train_cfg.val_batch_size,
+            shuffle=False,
+            collate_fn=self.collate_fn,
+            num_workers=self.train_cfg.num_workers,
+            pin_memory=True,
+            drop_last=False,
+        )
+
+    @property
+    def test_loader(self) -> DataLoader[Any]:
+        return DataLoader(
+            self.test_dataset,
             batch_size=self.train_cfg.val_batch_size,
             shuffle=False,
             collate_fn=self.collate_fn,

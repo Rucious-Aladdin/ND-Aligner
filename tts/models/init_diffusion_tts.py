@@ -1,11 +1,11 @@
 import dataclasses
 
 from ..config.stage2.model_config import DiffusionTTSConfigs
+from .diffusion.conformer_denoiser import ConformerDenoiser, ConformerDenoiserNetwork
 from .diffusion.karras_diffusion import KarrasDiffusionModel
 from .diffusion.submodules.cond_adapter import ConditionAdapter
-from .diffusion.conformer_denoiser import ConformerDenoiser, ConformerDenoiserNetwork
 from .diffusion_tts import KarrasTTSSynthesizer
-from .init_monotonic_tts import init_monotonic_tts
+from .init_ndaligner import init_nd_aligner
 
 
 def init_diffusion_model(config: DiffusionTTSConfigs) -> KarrasDiffusionModel:
@@ -35,7 +35,7 @@ def init_diffusion_tts(
 
     # 1. Initialize Stage 1 Backbone
     # Note: For Stage 2 training, we usually need the full backbone.
-    syn_backbone = init_monotonic_tts(
+    syn_backbone = init_nd_aligner(
         config=config.s1_config,
         load_vocoder=True,
         load_speaker_encoder=True,

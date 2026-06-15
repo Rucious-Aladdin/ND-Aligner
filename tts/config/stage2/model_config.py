@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from ..stage1.model_config import MonotonicTTSConfigs, TEXT_DIM, N_MELS, SPK_COND_DIM
+from ..ndaligner.model_config import N_MELS, SPK_COND_DIM, TEXT_DIM, NDAlignerConfigs
 
 
 @dataclass(frozen=True)
@@ -46,7 +46,7 @@ class ConformerDenoiserConfigs:
 @dataclass(frozen=True)
 class DiffusionTTSConfigs:
     # Backbone Stage 1 configuration
-    s1_config: MonotonicTTSConfigs = field(default_factory=MonotonicTTSConfigs)
+    s1_config: NDAlignerConfigs = field(default_factory=NDAlignerConfigs)
 
     # Stage 2 (Diffusion) specific configuration
     model: DiffusionModelConfigs = field(default_factory=DiffusionModelConfigs)

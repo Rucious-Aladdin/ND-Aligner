@@ -4,10 +4,20 @@ import os
 import os.path
 from dataclasses import dataclass, field
 
-from librosa import ex
-
 SAMPLE_RATE = 22050
 DATA_PARENT_DIR = "/shared/data_zfs/blue2959"
+
+N_MELS = 80
+
+DATASETS = ["vctk"]
+SEED = 42
+
+
+def cache_dir_name() -> str:
+    dataset_tag = "+".join(DATASETS)
+    feature_tag = f"mel{N_MELS}"
+
+    return f"cache-{dataset_tag}-{feature_tag}"
 
 
 @dataclass(frozen=True)
@@ -18,7 +28,7 @@ class AudioConfig:
     n_fft: int = 1024
     hop_length: int = 256
     win_length: int = 1024
-    n_mels: int = 80
+    n_mels: int = N_MELS
     f_min: float = 0.0
     f_max: float = 8000.0
     num_freq: int = 1025
@@ -27,18 +37,24 @@ class AudioConfig:
 @dataclass(frozen=True)
 class DatasetConfigs:
     # List of datasets to load: "ljspeech", "vctk", "libritts"
-    # dataset_list: list[str] = field(default_factory=lambda: ["libritts"])
-    dataset_list: list[str] = field(default_factory=lambda: ["vctk"])
+    dataset_list: list[str] = field(default_factory=lambda: list(DATASETS))
 
     # Root directories for each dataset type (preprocessed)
     ljspeech_root: str = os.path.join(DATA_PARENT_DIR, "LJSpeech-1.1-preprocessed")
+    ljspeech_num_test_samples: int = 30
+
     vctk_root: str = os.path.join(DATA_PARENT_DIR, "VCTK-preprocessed")
+    vctk_test_speakers: list[str] = field(
+        default_factory=lambda: ["p225", "p226", "p227", "p228", "p229", "p232"]
+    )
+
     libritts_root: str = os.path.join(DATA_PARENT_DIR, "LibriTTS-preprocessed")
 
-    # data_cache_dir: str = os.path.join(DATA_PARENT_DIR, "cache-vctk")
-    data_cache_dir: str = os.path.join(DATA_PARENT_DIR, "cache-libritts-new")
+    data_cache_dir: str = field(
+        default_factory=lambda: os.path.join(DATA_PARENT_DIR, cache_dir_name())
+    )
 
-    seed: int = 42
+    seed: int = SEED
     val_ratio: float = 0.01
     num_buckets: int = 10
 
@@ -48,20 +64,23 @@ class DatasetConfigs:
 
 @dataclass(frozen=True)
 class ExperimentConfigs:
-    train_time_eval_logging: bool = False
+    train_time_eval_logging: bool = True
 
-    base_dir: str = "/shared/data_zfs/blue2959/TemuTTS/stage1_experiments"
-    exp_name: str = "vctk_wo_reconstruction_loss+text_k=1"
-    exp_variant: str = "vctk_wo_reconstruction_loss+text_k=1"
+    base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments"
+    exp_name: str = "vctk_base+delta_mel+recon_weight_1.0"
+    exp_variant: str = "vctk_base+delta_mel+lower_recon_weight"
+
+    timit_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TRAIN"
+    timit_test_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TEST"
+    timit_sr: int = 16_000
+    timit_max_num_test_samples: int = 200
 
 
 @dataclass(frozen=True)
 class TrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    # run_name: str = "stage1_libritts+k=1+dec_pos_enc+dur_pred+bucketing"
-    run_name: str = "stage1_vctk+k=1+dec_pos_enc+dur_pred+bucketing+unary_conv"
-    # run_name: str = "monotonic_tts_vctk+ablation+wo_reconstruction_loss+text_k=1"
+    run_name: str = "nd_aligner_vctk"
 
     continue_path: str = ""
     continue_dir: str = ""
@@ -70,18 +89,18 @@ class TrainConfigs:
 
     # --- Intervals (Steps or Epochs) ---
     val_sanity_check: bool = True
-    val_sanity_check_full_epoch: bool = False
+    val_sanity_check_full_epoch: bool = True
     val_interval: int = 1
-    val_interval_step: int = -1
-    val_interval_step_skip_hook: bool = True
+    val_interval_step: int = 500
+    val_interval_step_skip_hook: bool = False
 
     log_interval: int = 10
     img_log_interval: int = 1000
     save_interval: int = 1000
 
     # --- Training Loop Limits ---
-    max_epochs: int = 1000
-    max_steps: int = 300000
+    max_epochs: int = 20
+    max_steps: int = 300000  # deprecated
 
     # --- Hardware & Dataloader ---
     seed: int = 1234
@@ -106,11 +125,7 @@ class TrainConfigs:
     # --- Checkpoint Management ---
     keep_best_count: int = 3
     keep_last_count: int = 3
-    monitor_loss: str = "mel_recon"  # "mel" "aux" "dur" "align_nll" ...
-
-    # --- Aligner Training Schedule ---
-    freeze_aligner: bool = False
-    freeze_aligner_until: int = 5000
+    monitor_loss: str = "recon"  # "recon" ...
 
     # Viterbi Maximum-path only training
     viterbi_only_training: bool = False
@@ -120,34 +135,34 @@ class TrainConfigs:
 @dataclass(frozen=True)
 class LossConfigs:
     # Spec Decoder Loss Scheduling
-    mel_recon_initial_weight: float = 1.0
-    mel_recon_final_weight: float = 1.0
-    mel_recon_start_step: int = 0
-    mel_recon_end_step: int = 100000
+    recon_init_weight: float = 5.0
+    recon_final_weight: float = 5.0
+    recon_start_step: int = 0
+    recon_end_step: int = 100000
 
     # Alignment NLL Loss Scheduling
-    align_forward_initial_weight: float = 5.0
-    align_forward_final_weight: float = 5.0
-    align_forward_start_step: int = 2500
-    align_forward_end_step: int = 5000
+    crf_init_weight: float = 5.0
+    crf_final_weight: float = 5.0
+    crf_start_step: int = 0
+    crf_end_step: int = 10000
 
     # Alignment Diagonal Loss Scheduling
-    align_diag_initial_weight: float = 1.0
-    align_diag_final_weight: float = 0.0
-    align_diag_start_step: int = 10000
-    align_diag_end_step: int = 15000
+    diag_init_weight: float = 5.0
+    diag_final_weight: float = 0.0
+    diag_start_step: int = 1000
+    diag_end_step: int = 1010
 
     # Alignment Viterbi KL Loss Scheduling
-    align_viterbi_kl_initial_weight: float = 0.0
-    align_viterbi_kl_final_weight: float = 0.0
-    align_viterbi_kl_start_step: int = 50000
-    align_viterbi_kl_end_step: int = 100000
+    viterbi_kl_init_weight: float = 0.0
+    viterbi_kl_final_weight: float = 0.0
+    viterbi_kl_start_step: int = 50000
+    viterbi_kl_end_step: int = 100000
 
     # Alignment Viterbi OT Loss Scheduling
-    align_viterbi_ot_initial_weight: float = 0.0
-    align_viterbi_ot_final_weight: float = 0.0
-    align_viterbi_ot_start_step: int = 150000
-    align_viterbi_ot_end_step: int = 200000
+    viterbi_ot_init_weight: float = 0.0
+    viterbi_ot_final_weight: float = 0.0
+    viterbi_ot_start_step: int = 150000
+    viterbi_ot_end_step: int = 200000
 
 
 @dataclass(frozen=True)

@@ -5,13 +5,12 @@ import noisereduce as nr
 import numpy as np
 import soundfile as sf
 import torch
+from global_constant import SR_16K
 from numpy.typing import NDArray
 from silero_vad import get_speech_timestamps, load_silero_vad
 
 from ..preprocess.config import PreprocessConfig
 from .utils.freq_filter import lowpass_filter
-
-SR_16K = 16000
 
 
 class AudioPreprocessor:

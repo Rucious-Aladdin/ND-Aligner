@@ -5,15 +5,15 @@ from typing import Any, NamedTuple, cast, override
 import torch
 from torch.utils.data import DataLoader
 
-from tts.config.stage1.data_config import DataConfig as Stage1DataConfig
-from tts.config.stage1.model_config import MonotonicTTSConfigs
-from tts.config.stage2.data_config import Stage2DataConfig, DiffusionTrainConfigs
+from tts.config.ndaligner.data_config import DataConfig as Stage1DataConfig
+from tts.config.ndaligner.model_config import NDAlignerConfigs
+from tts.config.stage2.data_config import DiffusionTrainConfigs, Stage2DataConfig
 from tts.config.stage2.model_config import DiffusionTTSConfigs
 from tts.config.utils.io import load_config
 from tts.data.data_types import TTSBatch
 from tts.data.tts_datafactory import TTSDataFactory
-from tts.logger.utils.plot_spectrogram import plot_spectrogram
 from tts.logger.utils.plot_alignment import plot_alignment
+from tts.logger.utils.plot_spectrogram import plot_spectrogram
 from tts.models.diffusion_tts import DiffusionForwardOutput, KarrasTTSSynthesizer
 from tts.models.init_diffusion_tts import init_diffusion_tts
 
@@ -79,7 +79,7 @@ class Stage2Trainer(BaseTrainer[Stage2DataConfig, DiffusionTTSConfigs]):
     def setup_dataloader(self) -> tuple[DataLoader[Any], DataLoader[Any]]:
         print("📦 Initializing datasets for Stage 2...")
         # Bridge config for DataFactory (it expects Stage 1 layout for loaders)
-        from tts.config.stage1.data_config import DataConfig as S1DataConfig
+        from tts.config.ndaligner.data_config import DataConfig as S1DataConfig
 
         bridge_config = S1DataConfig(audio=self.data_config.audio, dataset=self.data_config.dataset)
         data_factory = TTSDataFactory(bridge_config)
@@ -390,7 +390,7 @@ def main():
 
     # Override Stage 1 model config inside Stage 2 model config.
     if args.s1_model_config is not None:
-        s1_model_config = load_config(args.s1_model_config, MonotonicTTSConfigs)
+        s1_model_config = load_config(args.s1_model_config, NDAlignerConfigs)
         model_config = replace(
             model_config,
             s1_config=s1_model_config,

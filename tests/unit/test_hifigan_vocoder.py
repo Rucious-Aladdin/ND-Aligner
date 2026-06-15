@@ -2,32 +2,32 @@ import dataclasses
 import os
 
 import pytest
+import soundfile as sf
 import torch
 import torchaudio
-import soundfile as sf
 from scipy.io.wavfile import write
 
 from tts.audio.mel_spectrogram import MelSpecExtractor
-from tts.config.data_config import AudioConfig
-from tts.config.model_config import HifiGANVocoderConfigs
+from tts.config.ndaligner.data_config import AudioConfig
+from tts.config.ndaligner.training_module_config import HiFiGANVocoderConfigs
 from tts.models.modules.hifigan_vocoder import Generator
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA is not available")
 def test_hifigan_vocoder(visualize: bool):
     device = torch.device("cuda")
-    config = HifiGANVocoderConfigs()
+    config = HiFiGANVocoderConfigs()
     audio_config = AudioConfig()
 
     # Check if files exist
     if not os.path.exists(config.config_path) or not os.path.exists(config.ckpt_path):
-        pytest.skip(f"HiFi-GAN config or checkpoint not found at {config.config_path} or {config.ckpt_path}")
+        pytest.skip(
+            f"HiFi-GAN config or checkpoint not found at {config.config_path} or {config.ckpt_path}"
+        )
 
     print(f"\n🏗️ Initializing HiFi-GAN Generator from {config.config_path}...")
     vocoder = Generator.from_config_path(
-        config_path=config.config_path,
-        ckpt_path=config.ckpt_path,
-        device=device
+        config_path=config.config_path, ckpt_path=config.ckpt_path, device=device
     )
     vocoder.eval()
     vocoder.remove_weight_norm()
@@ -55,20 +55,28 @@ def test_hifigan_vocoder(visualize: bool):
     mel_batch = torch.randn(batch_size, n_mels, T_mel).to(device)
     with torch.no_grad():
         audio_batch = vocoder(mel_batch)
-    
+
     assert audio_batch.shape == (batch_size, 1, expected_length)
     print(f"✅ Batch generated audio shape: {audio_batch.shape}")
 
     # 3. Real WAV files Test (Reconstruction)
     print("\n🎧 Running reconstruction test with real WAV files...")
-    mel_extractor = MelSpecExtractor(audio_config).to(device)
-    
+    mel_extractor = MelSpecExtractor(
+        sr=audio_config.sr,
+        n_mels=audio_config.n_mels,
+        n_fft=audio_config.n_fft,
+        hop_length=audio_config.hop_length,
+        win_length=audio_config.win_length,
+        fmin=audio_config.f_min,
+        fmax=audio_config.f_max,
+    ).to(device)
+
     for i in range(1, 4):
         wav_path = f"tests/asset/example{i}.wav"
         if not os.path.exists(wav_path):
             print(f"⚠️ {wav_path} not found, skipping...")
             continue
-            
+
         # Load and preprocess using soundfile
         audio_data, sr = sf.read(wav_path)
         if audio_data.ndim == 1:
@@ -78,34 +86,36 @@ def test_hifigan_vocoder(visualize: bool):
 
         if sr != audio_config.sr:
             wav = torchaudio.transforms.Resample(sr, audio_config.sr)(wav)
-        
+
         wav = wav.to(device)
-        
+
         # Extract mel
         with torch.no_grad():
             mel_real = mel_extractor(wav)
             # Generate
             audio_recon = vocoder(mel_real)
-            
-        print(f"[{wav_path}] Input shape: {wav.shape}, Mel shape: {mel_real.shape}, Output shape: {audio_recon.shape}")
-        
+
+        print(
+            f"[{wav_path}] Input shape: {wav.shape}, Mel shape: {mel_real.shape}, Output shape: {audio_recon.shape}"
+        )
+
         assert audio_recon.dim() == 3
         # Length might differ slightly due to padding in stft, but should be roughly proportional
         # MelSpecExtractor uses reflect padding which might affect exact length slightly
         # but Generator should output mel_len * 256
         assert audio_recon.size(2) == mel_real.size(2) * 256
-        
+
         if visualize:
             from tests.utils.visualize_1d_tensor import visualize_1d_tensor
-            
+
             save_png = f"test_hifigan_reconstruction_example{i}.png"
             visualize_1d_tensor(
                 tensor=audio_recon,
                 batch_idx=0,
                 title=f"Reconstructed: example{i}.wav",
-                save_path=save_png
+                save_path=save_png,
             )
-            
+
             # Save as WAV
             save_wav = f"test_hifigan_reconstruction_example{i}.wav"
             # Scale back to int16 if needed, or keep as float32
@@ -116,9 +126,10 @@ def test_hifigan_vocoder(visualize: bool):
 
     if visualize:
         from tests.utils.visualize_1d_tensor import visualize_1d_tensor
+
         visualize_1d_tensor(
             tensor=audio,
             batch_idx=0,
             title="HiFi-GAN Generated Audio (Dummy)",
-            save_path="test_hifigan_vocoder_dummy_wav.png"
+            save_path="test_hifigan_vocoder_dummy_wav.png",
         )

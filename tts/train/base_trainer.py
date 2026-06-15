@@ -4,7 +4,6 @@ from abc import ABC, abstractmethod
 from dataclasses import fields, is_dataclass
 from typing import Any, Generic, TypeVar
 
-from matplotlib.pyplot import step
 import torch
 from torch.utils.data import DataLoader
 
@@ -74,7 +73,8 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
     def _init_ckpt_manager(self) -> CheckpointManager:
         return CheckpointManager(
             checkpoint_dir=os.path.join(self.run_dir, "checkpoints"),
-            keep_best_count=self.train_cfg.keep_best_count,
+            keep_best_epoch_count=self.train_cfg.keep_best_count,
+            keep_best_step_count=self.train_cfg.keep_best_count,
             keep_last_count=self.train_cfg.keep_last_count,
             monitor_loss=self.train_cfg.monitor_loss,
         )
@@ -148,6 +148,14 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
         last_output: Any,
     ):
         """Optional subclass hook for validation logging/visualization."""
+        pass
+
+    def on_training_end(
+        self,
+        epoch: int,
+        step: int,
+    ):
+        """Optional subclass hook for end-of-the-all-training."""
         pass
 
     def load_checkpoint(self):
@@ -272,11 +280,14 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
             if is_step_boundary:
                 if self.global_step % self.train_cfg.save_interval == 0:
                     self.ckpt_manager.save(
-                        self.model,
-                        self.optimizer,
-                        self.scheduler,
-                        self.global_step,
-                        epoch,
+                        model=self.model,
+                        optimizer=self.optimizer,
+                        scheduler=self.scheduler,
+                        step=self.global_step,
+                        epoch=epoch,
+                        save_periodic=True,
+                        save_best_step=False,
+                        save_best_epoch=False,
                     )
 
                 if (
@@ -284,12 +295,26 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
                     and self.global_step % self.train_cfg.val_interval_step == 0
                 ):
                     print(f"🔍  [Step {self.global_step}] Running step-based validation...")
-                    val_loss, _ = self.valid_epoch(
+
+                    val_loss, val_metrics = self.valid_epoch(
                         epoch,
                         self.global_step,
                         skip_epoch_end_hook=self.train_cfg.val_interval_step_skip_hook,
                     )
+
                     print(f"🌟  Step {self.global_step} Validation | Val Loss: {val_loss:.4f}")
+
+                    self.ckpt_manager.save(
+                        model=self.model,
+                        optimizer=self.optimizer,
+                        scheduler=self.scheduler,
+                        step=self.global_step,
+                        epoch=epoch,
+                        loss_values=val_metrics,
+                        save_periodic=False,
+                        save_best_step=True,
+                        save_best_epoch=False,
+                    )
 
                     self.model.train()
 
@@ -427,7 +452,6 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
             self.scaler = torch.amp.GradScaler("cuda")  # pyright: ignore[reportPrivateImportUsage]
 
         if self.train_cfg.val_sanity_check:
-            print("🔍  Running validation sanity check...")
             self._run_validation_sanity_check(self.global_step)
             print("✅  Sanity check passed.")
 
@@ -451,14 +475,21 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
                 print("-" * 90)
 
                 self.ckpt_manager.save(
-                    self.model,
-                    self.optimizer,
-                    self.scheduler,
-                    self.global_step,
-                    epoch,
+                    model=self.model,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
+                    step=self.global_step,
+                    epoch=epoch,
                     loss_values=val_metrics,
-                    is_best=True,
+                    save_periodic=False,
+                    save_best_step=False,
+                    save_best_epoch=True,
                 )
+
+        self.on_training_end(
+            epoch=epoch,
+            step=self.global_step,
+        )
 
         if self.logger:
             self.logger.close()

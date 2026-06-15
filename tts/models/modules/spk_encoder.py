@@ -13,7 +13,7 @@ if not hasattr(torchaudio, "list_audio_backends"):
 from speechbrain.inference.speaker import EncoderClassifier
 
 
-class SpeakerEncoder(nn.Module):
+class ECAPASpeakerEncoder(nn.Module):
     """
     Wrapper around SpeechBrain's ECAPA-TDNN for extracting speaker embeddings.
     Expects 16kHz mono audio waveform as input.
@@ -49,9 +49,15 @@ class SpeakerEncoder(nn.Module):
         Returns:
             torch.Tensor: Speaker embedding tensor (B, 192).
         """
-        # SpeechBrain expects waveform in (B, T)
-        # It also returns embeddings as (B, embedding_dim, 1), so squeeze the last dim
         with torch.no_grad():
             assert self.classifier is not None
-            embeddings = self.classifier.encode_batch(waveform.to(self.device))
-        return embeddings.squeeze(2)  # (B, 192, 1) -> (B, 192)
+
+            device = next(self.classifier.parameters()).device
+            waveform = waveform.to(device=device, dtype=torch.float32)
+
+            embeddings = self.classifier.encode_batch(waveform)
+
+        if embeddings.dim() == 3:
+            embeddings = embeddings.squeeze(-1)
+
+        return embeddings

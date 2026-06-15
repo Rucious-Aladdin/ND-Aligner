@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-from tts.config.stage1.data_config import DataConfig
+from tts.config.ndaligner.data_config import DataConfig
 from tts.config.utils.io import load_config
 from tts.data.tts_datafactory import TTSDataFactory
 

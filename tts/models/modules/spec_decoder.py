@@ -131,4 +131,4 @@ class SpecDecoder(nn.Module):
         if mask_conv is not None:
             x = x * mask_conv
 
-        return x.transpose(1, 2)
+        return x

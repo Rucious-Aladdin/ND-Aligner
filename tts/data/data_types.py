@@ -1,25 +1,14 @@
-from ast import Name
 from typing import NamedTuple
 
 import torch
 
 
-class LossWeights(NamedTuple):
-    dur: float
-    mel_recon: float
-    align_forward: float
-    align_diag: float
-    align_viterbi_kl: float
-    align_viterbi_ot: float
-
-
 class LossValues(NamedTuple):
-    dur: float
-    mel_recon: float
-    align_forward: float
-    align_diag: float
-    align_viterbi_kl: float
-    align_viterbi_ot: float
+    recon: float
+    crf: float
+    diag: float
+    viterbi_kl: float
+    viterbi_ot: float
 
 
 class TTSItem(NamedTuple):

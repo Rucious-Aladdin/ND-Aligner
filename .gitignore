@@ -5,6 +5,8 @@ ljspeech_runs/
 checkpoints/
 debug_outputs/
 eval/
+exp_configs/**/*.json
+
 # Python cache
 __pycache__/
 *.py[cod]

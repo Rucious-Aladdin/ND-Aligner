@@ -8,7 +8,7 @@ import torch
 from tqdm import tqdm
 
 from tts.config.utils.io import load_config
-from tts.models.modules.spk_encoder import SpeakerEncoder
+from tts.models.modules.spk_encoder import ECAPASpeakerEncoder
 
 from .config import PreprocessConfig
 
@@ -31,7 +31,7 @@ def main(args: Any):
     print(">>> Initializing SpeakerEncoder (ECAPA-TDNN)...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
     try:
-        speaker_encoder = SpeakerEncoder(device=device)
+        speaker_encoder = ECAPASpeakerEncoder(device=device)
     except Exception as e:
         print(f"Error loading SpeakerEncoder: {e}. Cannot proceed without a valid model.")
         return  # Exit if model cannot be loaded

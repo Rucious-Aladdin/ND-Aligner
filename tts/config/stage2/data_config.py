@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from ..stage1.data_config import AudioConfig, DatasetConfigs
+from ..ndaligner.data_config import AudioConfig, DatasetConfigs
 
 
 @dataclass(frozen=True)

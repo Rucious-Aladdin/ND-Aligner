@@ -2,8 +2,9 @@ from typing import override
 
 import torch
 import torch.nn as nn
-from ..submodules.unet2d import UNet2d
+
 from ..submodules.conv2d_net import Conv2dNet
+from ..submodules.unet2d import UNet2d
 
 
 class UnaryPotentialPredictor(nn.Module):
@@ -386,8 +387,7 @@ class MonotonicCRFAligner(nn.Module):
             return base_outputs
 
         hard_gamma, hard_durations, viterbi_path, viterbi_logp = self._viterbi_decode(
-            raw_unary=raw_unary,
-            unary_valid=length_valid,
+            log_b=log_b,
             dp_valid=dp_valid,
             spec_lengths=spec_lengths,
             text_lengths=text_lengths,
@@ -564,8 +564,7 @@ class MonotonicCRFAligner(nn.Module):
 
     def _viterbi_decode(
         self,
-        raw_unary: torch.Tensor,
-        unary_valid: torch.Tensor,
+        log_b: torch.Tensor,
         dp_valid: torch.Tensor,
         spec_lengths: torch.Tensor,
         text_lengths: torch.Tensor,
@@ -577,13 +576,8 @@ class MonotonicCRFAligner(nn.Module):
 
         subject to strict monotone topology.
         """
-        B, T_speech, T_text = raw_unary.shape
-        device = raw_unary.device
-
-        log_b = self._compute_log_unary_potential(
-            evidence=raw_unary,
-            unary_valid=unary_valid,
-        )
+        B, T_speech, T_text = log_b.shape
+        device = log_b.device
 
         delta_steps: list[torch.Tensor] = []
         backptr = torch.zeros(
@@ -624,26 +618,43 @@ class MonotonicCRFAligner(nn.Module):
         batch_idx = torch.arange(B, device=device)
         viterbi_logp = log_delta[batch_idx, spec_lengths - 1, text_lengths - 1]
 
-        path = torch.full(
+        # ------------------------------------------------------------------
+        # Backtracking:
+        # Avoid per-frame CUDA .item() synchronization.
+        # Move backptr/lengths to CPU once, then reconstruct the path on CPU.
+        # ------------------------------------------------------------------
+        backptr_cpu = backptr.detach().cpu()
+        spec_lengths_cpu = spec_lengths.detach().cpu()
+        text_lengths_cpu = text_lengths.detach().cpu()
+
+        path_cpu = torch.full(
             (B, T_speech),
             -1,
             dtype=torch.long,
-            device=device,
         )
-        hard_attn = raw_unary.new_zeros((B, T_speech, T_text))
 
         for b in range(B):  # backtracking
-            t_end = int(spec_lengths[b].item()) - 1
-            j_cur = int(text_lengths[b].item()) - 1
+            t_end = int(spec_lengths_cpu[b]) - 1
+            j_cur = int(text_lengths_cpu[b]) - 1
 
             for t in range(t_end, -1, -1):
-                path[b, t] = j_cur
-                hard_attn[b, t, j_cur] = 1.0
+                path_cpu[b, t] = j_cur
 
                 if t > 0:
-                    j_cur = int(backptr[b, t, j_cur].item())
+                    j_cur = int(backptr_cpu[b, t, j_cur])
 
+        path = path_cpu.to(device=device)
+
+        hard_attn = log_b.new_zeros((B, T_speech, T_text))
+        valid_t = path >= 0
+
+        b_idx = torch.arange(B, device=device).view(B, 1).expand(B, T_speech)
+        t_idx = torch.arange(T_speech, device=device).view(1, T_speech).expand(B, T_speech)
+        j_idx = path.clamp_min(0)
+
+        hard_attn[b_idx[valid_t], t_idx[valid_t], j_idx[valid_t]] = 1.0
         hard_attn = hard_attn.masked_fill(~dp_valid, 0.0)
+
         hard_durations = hard_attn.sum(dim=1)
 
         return hard_attn, hard_durations, path, viterbi_logp

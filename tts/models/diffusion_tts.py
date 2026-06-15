@@ -1,14 +1,14 @@
 from __future__ import annotations
 
-from typing import Any, NamedTuple, override, cast
+from typing import Any, NamedTuple, cast, override
 
 import torch
 
+from tts.models.utils.sequence_mask import sequence_mask
+
 from .base_model import BaseModel
 from .diffusion.karras_diffusion import KarrasDiffusionModel
-
-from .monotonic_tts import MonotonicTTSSynthesizer, SynthesizerInferenceOutput
-from tts.models.utils.sequence_mask import sequence_mask
+from .ndaligner import NDAligner, SynthesizerInferenceOutput
 
 
 class DiffusionForwardOutput(NamedTuple):
@@ -32,7 +32,7 @@ class KarrasTTSSynthesizer(BaseModel):
 
     def __init__(
         self,
-        syn: MonotonicTTSSynthesizer,
+        syn: NDAligner,
         diffusion_model: KarrasDiffusionModel,
         stochastic_sampling: bool = True,
     ) -> None:
@@ -72,7 +72,7 @@ class KarrasTTSSynthesizer(BaseModel):
         with torch.no_grad():
             h_text = cast(
                 torch.Tensor,
-                self.syn_backbone.text_encoder_align(
+                self.syn_backbone.text_encoder(
                     x=x,
                     x_mask=text_mask,
                 ),
@@ -84,7 +84,7 @@ class KarrasTTSSynthesizer(BaseModel):
                 cond=cond,
             )  # (B, C_spec, T_mel)
 
-            out = self.syn_backbone.compute_aligned_feats(
+            out = self.syn_backbone.compute_alignments(
                 h_text=h_text,
                 text_mask=text_mask,
                 cond=cond,
@@ -162,12 +162,12 @@ class KarrasTTSSynthesizer(BaseModel):
         text_mask = text_mask_bool.unsqueeze(1).to(dtype=x.dtype)
 
         # 1. Get Aligned Features from Stage 1 (detached)
-        h_text = self.syn_backbone.text_encoder_align(
+        h_text = self.syn_backbone.text_encoder(
             x=x,
             x_mask=text_mask,
         )  # (B, C_text, T_text)
 
-        out = self.syn_backbone.compute_aligned_feats(
+        out = self.syn_backbone.compute_alignments(
             h_text=h_text,
             text_mask=text_mask,
             cond=cond,

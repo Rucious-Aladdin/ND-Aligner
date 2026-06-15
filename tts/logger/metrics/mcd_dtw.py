@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import numpy as np
-import torch
 import librosa
+import numpy as np
 import pysptk
+import torch
 
 _LOGDB_CONST = 10.0 / np.log(10.0) * np.sqrt(2.0)
 
@@ -96,13 +96,18 @@ def compute_mcd_dtw(
     hyp_wavs: torch.Tensor,
     hyp_wav_mask: torch.Tensor,
     *,
+    sampling_rate: int = 22050,
+    alpha: float | None = None,
     exclude_c0: bool = True,
+    frame_length: int = 1024,
+    hop_length: int = 256,
+    order: int = 25,
 ) -> torch.Tensor:
     """
     Compute per-sample MCD-DTW between reference and hypothesis waveforms.
 
     Assumptions:
-        - sampling rate is 22050 Hz
+        - ref_wavs and hyp_wavs have the same sampling rate
         - wav tensors are already mono waveform tensors
         - masks are sample-level masks
 
@@ -111,12 +116,43 @@ def compute_mcd_dtw(
         ref_wav_mask: (B, T_ref), 1 for valid samples
         hyp_wavs:     (B, T_hyp)
         hyp_wav_mask: (B, T_hyp), 1 for valid samples
+
+        sampling_rate:
+            Sampling rate shared by ref_wavs and hyp_wavs.
+            Used only to choose the default mel-cepstrum alpha when alpha is None.
+
+        alpha:
+            All-pass constant for mel-cepstral analysis.
+            If None:
+                - 16000 Hz -> 0.41
+                - 22050 Hz -> 0.45
+
         exclude_c0:
             If True, excludes the 0-th mel-cepstral coefficient.
+
+        frame_length:
+            STFT frame length.
+
+        hop_length:
+            STFT hop length.
+
+        order:
+            Mel-cepstral order.
 
     Returns:
         mcd_dtw: (B,)
     """
+    if alpha is None:
+        if sampling_rate == 16000:
+            alpha = 0.41
+        elif sampling_rate == 22050:
+            alpha = 0.45
+        else:
+            raise ValueError(
+                f"Unsupported sampling_rate={sampling_rate} for automatic alpha. "
+                + "Pass alpha explicitly."
+            )
+
     if ref_wavs.dim() != 2:
         raise ValueError(f"ref_wavs must have shape (B, T_ref), got {tuple(ref_wavs.shape)}.")
     if hyp_wavs.dim() != 2:
@@ -150,6 +186,10 @@ def compute_mcd_dtw(
             ref_wav=ref_wav_np,
             hyp_wav=hyp_wav_np,
             exclude_c0=exclude_c0,
+            frame_length=frame_length,
+            hop_length=hop_length,
+            order=order,
+            alpha=alpha,
         )
         scores.append(score)
 
