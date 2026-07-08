@@ -1,25 +1,49 @@
 from dataclasses import dataclass, field
 
-from .data_config import N_MELS
+from tts.config.preprocess.preprocess_config import PreprocessConfigs
+from tts.tokenizer.load_tokenizer import load_tokenizer
 
-SPEC_DIM = 256
+from .data_config import (
+    FASTSPEECH2_TOKENIZER_LEXION_PATH,
+    INPUT_FEATURE_TYPE,
+    N_FFT,
+    N_MELS,
+    TOKENIZER_TYPE,
+    AudioConfigs,
+)
+
+SPEC_DIM = 192
 TEXT_DIM = 192
 SPK_COND_DIM = 192  # ECAPA-TDNN
 
-USE_DELTA_MEL = True
-USE_DELTA_DELTA_MEL = False
+USE_DELTA_FEAT = False
+USE_DELTA_DELTA_FEAT = False
+USE_OPTIONAL_SKIP_SEP = True  # z -> z+2 transition for <blank> or " " token
+
+tokenizer = load_tokenizer(TOKENIZER_TYPE)
 
 
 def spec_indim() -> int:
-    return N_MELS * (1 + int(USE_DELTA_MEL) + int(USE_DELTA_DELTA_MEL))
+    if INPUT_FEATURE_TYPE == "mel":
+        return N_MELS * (1 + int(USE_DELTA_FEAT) + int(USE_DELTA_DELTA_FEAT))
+    elif INPUT_FEATURE_TYPE == "linspec":
+        n_linspec = N_FFT // 2 + 1
+        return n_linspec * (1 + int(USE_DELTA_FEAT) + int(USE_DELTA_DELTA_FEAT))
+    else:
+        raise ValueError()
+
+
+def n_vocabs() -> int:
+    return tokenizer.n_vocab * 2
 
 
 @dataclass(frozen=True)
 class TextEncoderConfigs:
     # common dimensions
-    n_vocab: int = 256
+    n_vocab: int = field(default_factory=n_vocabs)
     dim_out: int = TEXT_DIM
     dim_hidden: int = 256
+    dim_cond: int = SPK_COND_DIM
     kernel_sizes: list[int] = field(default_factory=lambda: [1])
 
 
@@ -33,16 +57,16 @@ class SpecEncoderConfigs:
     # architectures
     kernel_size: int = 3
     dropout_p: float = 0.15
-    dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 1, 1, 1, 1])
+    dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 2, 2, 3, 3])
 
 
 @dataclass(frozen=True)
 class SpecDecoderConfigs:
     in_channels: int = TEXT_DIM
     out_channels: int = N_MELS
-    hidden_channels: int = 256
+    hidden_channels: int = 192
     cond_dim: int = SPK_COND_DIM
-    kernel_sizes: list[int] = field(default_factory=lambda: [1, 1, 1])
+    kernel_sizes: list[int] = field(default_factory=lambda: [3, 3, 3, 3])
     dilation_base: int = 1
     dropout: float = 0.15
 
@@ -56,20 +80,16 @@ class CRFAlignerConfigs:
     cond_channels: int = 32
 
     # unary network configs
-    unary_network_type: str = "conv"  # "unet" "conv" "negative-l2"
-    unary_base_dim: int = 16
-    unary_groups: int = 8
-
-    # conv only configs
-    conv_num_layers: int = 4
-    conv_kernel_size: list[int] = field(default_factory=lambda: [3, 3])
-
-    # normalization and support configs
-    unary_support_type: str = "local"  # "local" or "global"
-    unary_radius: int = 10
+    unary_network_type: str = "conv"  # "conv" "negative-l2"
+    unary_support_type: str = "global"  # "global", "raw", "bernoulli"
     unary_temperature: float = 1.0
     unary_scale_init: float = -2.0
-    unary_apply_progress_feature: bool = False
+
+    # conv only configs
+    conv_num_layers: int = 12
+    conv_num_groups: int = 8
+    conv_dim_hidden: int = 48
+    conv_kernel_size: list[int] = field(default_factory=lambda: [3, 3])
 
 
 @dataclass(frozen=True)
@@ -79,5 +99,14 @@ class NDAlignerConfigs:
     spec_dec: SpecDecoderConfigs = field(default_factory=SpecDecoderConfigs)
     aligner: CRFAlignerConfigs = field(default_factory=CRFAlignerConfigs)
 
-    use_delta_mel: bool = USE_DELTA_MEL
-    use_delta_delta_mel: bool = USE_DELTA_DELTA_MEL
+    # for inference from wavforms
+    preprocess: PreprocessConfigs = field(default_factory=PreprocessConfigs)
+    audio: AudioConfigs = field(default_factory=AudioConfigs)
+
+    use_delta_feat: bool = USE_DELTA_FEAT
+    use_delta_delta_feat: bool = USE_DELTA_DELTA_FEAT
+    use_optional_skip_sep: bool = USE_OPTIONAL_SKIP_SEP
+
+    tokenizer_type: str = TOKENIZER_TYPE
+    fastspeech2_tokenizer_lexion_path = FASTSPEECH2_TOKENIZER_LEXION_PATH
+    separator_token_id: int = tokenizer.seperator_id

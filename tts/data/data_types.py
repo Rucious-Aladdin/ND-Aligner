@@ -8,7 +8,6 @@ class LossValues(NamedTuple):
     crf: float
     diag: float
     viterbi_kl: float
-    viterbi_ot: float
 
 
 class TTSItem(NamedTuple):
@@ -24,7 +23,16 @@ class TTSItem(NamedTuple):
 
 class TTSDatasetInstance(NamedTuple):
     text: torch.Tensor  # (T_text,)
-    spec: torch.Tensor  # (n_mels, T_mel)
+
+    # Alignment input feature.
+    #   mel:     (n_mels, T)
+    #   linspec: (n_fft // 2 + 1, T)
+    spec: torch.Tensor
+
+    # Reconstruction target feature. Always mel.
+    #   (n_mels, T)
+    recon_spec: torch.Tensor
+
     cond: torch.Tensor  # (cond_dim,)
 
     # metadata
@@ -36,16 +44,23 @@ class TTSDatasetInstance(NamedTuple):
 
 
 class TTSBatch(NamedTuple):
-    text: torch.Tensor  # Text token indices (B, T_text)
-    text_lengths: torch.Tensor  # Lengths of text (B,)
+    text: torch.Tensor  # (B, T_text)
+    text_lengths: torch.Tensor  # (B,)
 
-    spec: torch.Tensor  # Ground-truth spectrogram (B, n_mels, T_mel)
-    spec_lengths: torch.Tensor  # Lengths of speech (B,)
+    # Alignment input feature.
+    #   mel:     (B, n_mels, T)
+    #   linspec: (B, n_fft // 2 + 1, T)
+    spec: torch.Tensor
+    spec_lengths: torch.Tensor
 
-    cond: torch.Tensor  # Condition vector (B, cond_dim)
+    # Reconstruction target. Always mel.
+    #   (B, n_mels, T)
+    recon_spec: torch.Tensor
+    recon_spec_lengths: torch.Tensor
 
-    # Metadata for logging/eval
-    scripts: list[str]  # Raw text scripts for logging
+    cond: torch.Tensor  # (B, cond_dim)
+
+    scripts: list[str]
     wav_paths: list[str]
     utt_ids: list[str]
     spk_ids: list[str]

@@ -1,27 +1,7 @@
 from pathlib import Path
 from typing import NamedTuple
 
-from tts.tokenizer.text_tokenizer import TextTokenizer
-
-HYP_IGNORE_SYMBOLS = {
-    "^",
-    "~",
-    ";",
-    ":",
-    ",",
-    ".",
-    "!",
-    "?",
-    "¡",
-    "¿",
-    "—",
-    "…",
-    '"',
-    "«",
-    "»",
-    "“",
-    "”",
-}
+from tts.tokenizer.base_tokenizer import BaseTokenizer
 
 
 class MatchedWords(NamedTuple):
@@ -88,7 +68,7 @@ def split_ipa_words(ipa_text: str) -> list[str]:
 class WordsMapper:
     def __init__(
         self,
-        tokenizer: TextTokenizer,
+        tokenizer: BaseTokenizer,
         hyp_ignore_symbols: set[str] | None = None,
         max_ref_words_per_hyp_word: int = 5,
     ) -> None:
@@ -218,7 +198,7 @@ class WordsMapper:
                 return None
 
             text = " ".join(words)
-            ipa_text = self.tokenizer.to_ipa(text)
+            ipa_text = self.tokenizer.to_token_string(text)
             chunks = split_ipa_words(ipa_text)
 
             key = "".join(normalize_match_key(c) for c in chunks)
@@ -333,7 +313,8 @@ if __name__ == "__main__":
 
     from tqdm import tqdm
 
-    from tts.tokenizer.text_tokenizer import TextTokenizer
+    from tts.tokenizer.arpa_tokenizer import ARPATokenizer
+    from tts.tokenizer.espeak_tokenizer import ESPEAKTokenizer
 
     def read_timit_wrd(wrd_path: str | Path) -> list[TimitWordSegment]:
         segments: list[TimitWordSegment] = []
@@ -405,7 +386,7 @@ if __name__ == "__main__":
     def run_one_sample(
         wrd_path: Path,
         *,
-        tokenizer: TextTokenizer,
+        tokenizer: BaseTokenizer,
         mapper: WordsMapper,
         verbose: bool,
     ) -> float:
@@ -417,13 +398,23 @@ if __name__ == "__main__":
         text = read_timit_txt(txt_path)
 
         # Same tokenization path as TTSDataset:
-        #   x = self.tokenizer(item.text).squeeze(0)
         token_ids = tokenizer(text).squeeze(0)
 
         decoded = tokenizer.decode(token_ids)
         assert isinstance(decoded, str)
 
-        hyp_symbols = list(decoded)
+        hyp_symbols_raw = tokenizer.decode_to_symbols(token_ids)
+
+        if len(hyp_symbols_raw) > 0 and isinstance(hyp_symbols_raw[0], list):
+            raise ValueError("Expected 1D token symbols.")
+
+        hyp_symbols = [str(sym) for sym in hyp_symbols_raw]
+
+        assert len(hyp_symbols) == token_ids.numel(), (
+            f"len(hyp_symbols)={len(hyp_symbols)}, token_ids.numel()={token_ids.numel()}\n"
+            f"decoded={decoded!r}\n"
+            f"hyp_symbols={hyp_symbols}"
+        )
 
         matched = mapper(
             ref_seqs=ref_words,
@@ -452,7 +443,7 @@ if __name__ == "__main__":
             print(f"WRD: {wrd_path}")
             print(f"TXT: {txt_path}")
             print(f"Text:    {text}")
-            print(f"IPA:     {tokenizer.to_ipa(text)}")
+            print(f"IPA:     {tokenizer.to_token_string(text)}")
             print(f"Decoded: {decoded}")
             print()
 
@@ -492,11 +483,12 @@ if __name__ == "__main__":
 
         return matched.coverage_ratio
 
-    tokenizer = TextTokenizer()
+    # tokenizer = ESPEAKTokenizer()
+    tokenizer = ARPATokenizer()
 
     mapper = WordsMapper(
         tokenizer=tokenizer,
-        hyp_ignore_symbols=HYP_IGNORE_SYMBOLS,
+        hyp_ignore_symbols=tokenizer.ignore_symbols,
         max_ref_words_per_hyp_word=5,
     )
 
@@ -608,3 +600,40 @@ if __name__ == "__main__":
     # 2개짜리와 3개짜리가 병합된 시퀀스를 각각 최대 5개씩 뽑아서 출력합니다.
     print_examples(merged_2plus_examples, "Sequences with 2+ merged words", max_samples=5)
     print_examples(merged_3plus_examples, "Sequences with 3+ merged words", max_samples=5)
+
+    wrd_paths = sorted(timit_test_root.rglob("*.WRD"))
+    wrd_paths += sorted(timit_test_root.rglob("*.wrd"))
+
+    if not wrd_paths:
+        raise FileNotFoundError(f"No WRD files found under {timit_test_root}")
+
+    # -------------------------------------------------------------------------
+    # Verbose examples using run_one_sample
+    # -------------------------------------------------------------------------
+    example_wrd_paths = random.sample(
+        wrd_paths,
+        k=min(2, len(wrd_paths)),
+    )
+
+    tqdm.write("=" * 80)
+    tqdm.write("[Info] Running 2 verbose run_one_sample examples")
+    tqdm.write("=" * 80)
+
+    for example_idx, example_wrd_path in enumerate(example_wrd_paths):
+        tqdm.write(f"\n[Example {example_idx}] {example_wrd_path}")
+
+        try:
+            coverage = run_one_sample(
+                example_wrd_path,
+                tokenizer=tokenizer,
+                mapper=mapper,
+                verbose=True,
+            )
+            tqdm.write(f"[Example {example_idx}] Coverage: {coverage:.4f}")
+
+        except Exception as e:
+            tqdm.write(f"[Example {example_idx}] Failed: {repr(e)}")
+
+    coverage_ratios: list[float] = []
+    num_warnings = 0
+    num_failed = 0

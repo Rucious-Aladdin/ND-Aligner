@@ -1,24 +1,20 @@
+from __future__ import annotations
+
 import math
 import random
-import time
 from pathlib import Path
 from typing import NamedTuple
 
-import librosa
 import torch
 import torchaudio.functional as AF
-from silero_vad import get_speech_timestamps, load_silero_vad
 from tqdm import tqdm
 
-from tts.audio.mel_spectrogram import MelSpecExtractor
-from tts.config.ndaligner.data_config import AudioConfig
-from tts.logger.metrics.entropy import compute_framewise_entropy
-from tts.logger.metrics.mcd_dtw import compute_mcd_dtw
 from tts.models.modules.hifigan_vocoder import Generator
-from tts.models.modules.spk_encoder import ECAPASpeakerEncoder
 from tts.models.ndaligner import AlignerFeatures, NDAligner
-from tts.tokenizer.text_tokenizer import TextTokenizer
+from tts.models.utils.input_maker import AlignerInputMaker
 
+from ..utils.entropy import compute_framewise_entropy
+from ..utils.mcd_dtw import compute_mcd_dtw
 from .word_mapper import MatchedWords, TimitWordSegment, WordsMapper
 
 
@@ -36,57 +32,46 @@ class TIMITMetrics(NamedTuple):
 class TIMITSampleResult(NamedTuple):
     boundary_errors: list[float]
     mcd_dtw: float | None
-    posterior_entropy: float
+    posterior_entropy: float | None
 
 
 class TIMITBenchMarker:
+    """
+    TIMIT word-boundary benchmark for ND-Aligner.
+
+    This refactored version delegates all model-input preprocessing to
+    AlignerInputMaker. The benchmark itself only performs:
+      - TIMIT WRD/TXT bookkeeping
+      - aligner execution
+      - token-to-word mapping
+      - boundary-error, entropy, and optional MCD-DTW evaluation
+    """
+
     def __init__(
         self,
         root_dir: str | Path,
         ref_audio_sr: int,
         hyp_audio_sr: int,
         hyp_hop_length: int,
-        tokenizer: TextTokenizer,
-        audio_config: AudioConfig,
+        input_maker: AlignerInputMaker,
         hyp_ignore_symbols: set[str] | None = None,
         max_ref_words_per_hyp_word: int = 5,
-        spk_cond_dim: int = 192,
-        rms_normalize: bool = True,
-        rms_target: float = 0.1,
         seed: int = 42,
-        vad_rms_normalize: bool = True,
     ):
         self.root_dir = Path(root_dir)
-        self.ref_audio_sr = ref_audio_sr
-        self.hyp_audio_sr = hyp_audio_sr
-        self.hyp_hop_length = hyp_hop_length
-        self.spk_cond_dim = spk_cond_dim
-
-        self.rms_normalize = rms_normalize
-        self.rms_target = rms_target
-        self.vad_rms_normalize = vad_rms_normalize
-
-        self.silero_model = load_silero_vad()
-
-        self.tokenizer = tokenizer
-        self.mel_extractor = MelSpecExtractor(
-            sr=audio_config.sr,
-            n_mels=audio_config.n_mels,
-            n_fft=audio_config.n_fft,
-            hop_length=audio_config.hop_length,
-            win_length=audio_config.win_length,
-            fmin=audio_config.f_min,
-            fmax=audio_config.f_max,
-        )
+        self.ref_audio_sr = int(ref_audio_sr)
+        self.hyp_audio_sr = int(hyp_audio_sr)
+        self.hyp_hop_length = int(hyp_hop_length)
+        self.input_maker = input_maker
+        self.tokenizer = input_maker.tokenizer
 
         self.word_mapper = WordsMapper(
-            tokenizer=tokenizer,
+            tokenizer=self.tokenizer,
             hyp_ignore_symbols=hyp_ignore_symbols,
             max_ref_words_per_hyp_word=max_ref_words_per_hyp_word,
         )
         self.seed = seed
 
-        # Recursively find word, text, wav triplets
         wav_paths = sorted(list(self.root_dir.rglob("*.WAV")) + list(self.root_dir.rglob("*.wav")))
         triplets: list[tuple[Path, Path, Path]] = []
         for wav_path in wav_paths:
@@ -109,35 +94,31 @@ class TIMITBenchMarker:
     def __call__(
         self,
         aligner: NDAligner,
-        speaker_encoder: ECAPASpeakerEncoder | None = None,
         vocoder: Generator | None = None,
         max_test_samples: int | None = None,
         save_align_figure: bool = False,
         align_figure_dir: str | Path | None = None,
+        is_test: bool = False,
     ) -> TIMITMetrics:
-        # Preserve original training/eval states.
         was_aligner_training = aligner.training
-        was_speaker_encoder_training = (
-            speaker_encoder.training if speaker_encoder is not None else None
-        )
+        was_input_maker_training = self.input_maker.training
         was_vocoder_training = vocoder.training if vocoder is not None else None
 
+        # speaker_encoder is accepted only for backward-compatible call sites.
+        # Preprocessing now uses self.input_maker.speaker_encoder internally.
+
         device = next(aligner.parameters()).device
-        self.mel_extractor.to(device=device)
+        self.input_maker.to(device=device)
 
         try:
             aligner.eval()
-
-            if speaker_encoder is not None:
-                speaker_encoder.eval()
-
+            self.input_maker.eval()
             if vocoder is not None:
                 vocoder.eval()
 
-            if max_test_samples is None:
-                triplets = self.triplets
-            else:
-                triplets = self.triplets[:max_test_samples]
+            triplets = (
+                self.triplets if max_test_samples is None else self.triplets[:max_test_samples]
+            )
 
             all_boundary_errors: list[float] = []
             all_mcd_dtw: list[float] = []
@@ -153,15 +134,15 @@ class TIMITBenchMarker:
                     wrd_path=wrd_path,
                     wav_path=wav_path,
                     aligner=aligner,
-                    speaker_encoder=speaker_encoder,
                     vocoder=vocoder,
                     save_align_figure=save_align_figure,
                     align_figure_dir=align_figure_dir,
+                    is_test=is_test,
                 )
 
                 all_boundary_errors.extend(result.boundary_errors)
-                all_entropy.append(result.posterior_entropy)
-
+                if result.posterior_entropy is not None:
+                    all_entropy.append(result.posterior_entropy)
                 if result.mcd_dtw is not None:
                     all_mcd_dtw.append(result.mcd_dtw)
 
@@ -177,22 +158,22 @@ class TIMITBenchMarker:
                 )
 
             err_tensor = torch.tensor(all_boundary_errors, dtype=torch.float32)
-
             mae = err_tensor.mean().item()
             p_10ms = (err_tensor <= 0.010).float().mean().item() * 100.0
             p_25ms = (err_tensor <= 0.025).float().mean().item() * 100.0
             p_50ms = (err_tensor <= 0.050).float().mean().item() * 100.0
             p_100ms = (err_tensor <= 0.100).float().mean().item() * 100.0
 
-            if all_mcd_dtw:
-                mcd_dtw = torch.tensor(all_mcd_dtw, dtype=torch.float32).mean().item()
-            else:
-                mcd_dtw = float("nan")
-
-            if all_entropy:
-                posterior_entropy = torch.tensor(all_entropy, dtype=torch.float32).mean().item()
-            else:
-                posterior_entropy = float("nan")
+            mcd_dtw = (
+                torch.tensor(all_mcd_dtw, dtype=torch.float32).mean().item()
+                if all_mcd_dtw
+                else float("nan")
+            )
+            posterior_entropy = (
+                torch.tensor(all_entropy, dtype=torch.float32).mean().item()
+                if all_entropy
+                else float("nan")
+            )
 
             return TIMITMetrics(
                 word_boundary_error=mae,
@@ -205,33 +186,27 @@ class TIMITBenchMarker:
             )
 
         finally:
-            # Restore original modes.
             if was_aligner_training:
                 aligner.train()
-
-            if speaker_encoder is not None and was_speaker_encoder_training:
-                speaker_encoder.train()
-
+            if was_input_maker_training:
+                self.input_maker.train()
             if vocoder is not None and was_vocoder_training:
                 vocoder.train()
 
+    @torch.no_grad()
     def run_one(
         self,
         txt_path: Path | str,
         wrd_path: Path | str,
         wav_path: Path | str,
         aligner: NDAligner,
-        speaker_encoder: ECAPASpeakerEncoder | None,
         vocoder: Generator | None = None,
         save_align_figure: bool = False,
         align_figure_dir: str | Path | None = None,
+        is_test: bool = False,
     ) -> TIMITSampleResult:
-
         aligner.eval()
-        if speaker_encoder is not None:
-            speaker_encoder.eval()
-
-        device = next(aligner.parameters()).device
+        self.input_maker.eval()
 
         txt_path = Path(txt_path)
         wrd_path = Path(wrd_path)
@@ -241,65 +216,49 @@ class TIMITBenchMarker:
         ref_words = [seg.word for seg in wrd_segments]
         text = self._read_txt(txt_path)
 
-        token_ids = self.tokenizer(text).to(device)  # (1, T_text)
-        x_lengths = torch.tensor([token_ids.size(1)], device=device)
+        batch = self.input_maker.make_with_audio(
+            wav_paths=wav_path,
+            scripts=[text],
+        )
 
-        wav_16k_np, _ = librosa.load(str(wav_path), sr=16000, mono=True)
-        wav_16k_cpu = torch.from_numpy(wav_16k_np).float().unsqueeze(0)
-
-        if self.hyp_audio_sr == 16000:
-            wav_hyp_cpu = wav_16k_cpu.clone()
-        else:
-            wav_hyp_np, _ = librosa.load(str(wav_path), sr=self.hyp_audio_sr, mono=True)
-            wav_hyp_cpu = torch.from_numpy(wav_hyp_np).float().unsqueeze(0)
-
-        if self.rms_normalize:
-            speech_span = self._get_silero_speech_span_16k(wav_16k_cpu)
-
-            if speech_span is None:
-                rms_source = wav_16k_cpu
-            else:
-                start, end = speech_span
-                rms_source = wav_16k_cpu[..., start:end]
-
-            gain = self._compute_rms_gain(
-                rms_source=rms_source,
-                rms_target=self.rms_target,
+        cond = (
+            torch.tensor(
+                0.0,
+                device=batch.x.device,
             )
-
-            wav_16k_cpu = torch.clamp(wav_16k_cpu * gain, -1.0, 1.0)
-            wav_hyp_cpu = torch.clamp(wav_hyp_cpu * gain, -1.0, 1.0)
-
-        wav_hyp = wav_hyp_cpu.to(device=device)
-
-        mel = self.mel_extractor(wav_hyp).to(device)
-        y_lengths = torch.tensor([mel.size(2)], device=device)
-
-        if speaker_encoder is not None:
-            wav_16k = wav_16k_cpu.to(device=device)
-            emb = speaker_encoder(wav_16k)
-            cond = emb.view(1, -1).to(device=device, dtype=mel.dtype)
-        else:
-            cond = torch.zeros(
-                1,
-                self.spk_cond_dim,
-                device=device,
-                dtype=mel.dtype,
-            )
+            if batch.cond is None
+            else batch.cond
+        )
 
         features = aligner.compute_alignments(
-            x=token_ids,
-            x_lengths=x_lengths,
-            y=mel,
-            y_lengths=y_lengths,
+            x=batch.x,
+            x_lengths=batch.x_lengths,
+            y=batch.y,
+            y_lengths=batch.y_lengths,
             cond=cond,
+            compute_soft_path=is_test,
             compute_hard_path=True,
         )
 
         assert features.hard_dur is not None
-        hard_dur = features.hard_dur[0].cpu().tolist()
+        hard_dur = features.hard_dur[0].detach().cpu().tolist()
 
-        hyp_symbols = list(self.tokenizer.decode(token_ids.squeeze(0).cpu()))
+        text_len = int(batch.x_lengths[0].item())
+        token_ids_1d = batch.x[0, :text_len].detach().cpu()
+        hyp_symbols_raw = self.tokenizer.decode_to_symbols(token_ids_1d)
+
+        if len(hyp_symbols_raw) > 0 and isinstance(hyp_symbols_raw[0], list):
+            raise ValueError("Expected 1D token symbols, got batched symbols.")
+
+        hyp_symbols = [str(sym) for sym in hyp_symbols_raw]
+        if len(hyp_symbols) != len(hard_dur):
+            raise RuntimeError(
+                "Token-symbol / duration length mismatch.\n"
+                + f"len(hyp_symbols)={len(hyp_symbols)}, len(hard_dur)={len(hard_dur)}\n"
+                + f"decoded={self.tokenizer.decode(token_ids_1d)!r}\n"
+                + f"symbols={hyp_symbols}\n"
+            )
+
         matched = self.word_mapper(ref_seqs=ref_words, hyp_seqs=hyp_symbols)
 
         if save_align_figure:
@@ -314,7 +273,7 @@ class TIMITBenchMarker:
                 hyp_symbols=hyp_symbols,
                 hard_dur=hard_dur,
                 features=features,
-                t_mel=mel.size(2),
+                t_mel=batch.y.size(2),
             )
 
         boundary_errors = self._get_eval_instance(
@@ -323,37 +282,36 @@ class TIMITBenchMarker:
             hard_dur=hard_dur,
         )
 
-        spec_mask = self._make_mel_mask(
-            y_lengths=y_lengths,
-            t_mel=mel.size(2),
-            dtype=mel.dtype,
-            device=mel.device,
+        spec_mask = self._make_spec_mask(
+            y_lengths=batch.y_lengths,
+            t_spec=batch.y.size(2),
+            dtype=batch.y.dtype,
+            device=batch.y.device,
         )
 
-        posterior_entropy = compute_framewise_entropy(
-            attn=features.soft_attn,
-            mask=spec_mask,
-        ).item()
+        mcd_dtw = posterior_entropy = None
+        if is_test:
+            posterior_entropy = compute_framewise_entropy(
+                attn=features.soft_attn,
+                mask=spec_mask,
+            ).item()
 
-        mcd_dtw = None
-        if vocoder is not None:
-            if self.ref_audio_sr != 16000:
-                raise ValueError(
-                    "This simplified TIMIT path assumes ref_audio_sr == 16000 "
-                    + f"for MCD-DTW, got {self.ref_audio_sr}."
+            if vocoder is not None:
+                if self.ref_audio_sr != 16000:
+                    raise ValueError(
+                        "This simplified TIMIT path assumes ref_audio_sr == 16000 "
+                        + f"for MCD-DTW, got {self.ref_audio_sr}."
+                    )
+
+                mcd_dtw = self._compute_reconstruction_mcd_dtw(
+                    aligner=aligner,
+                    vocoder=vocoder,
+                    features=features,
+                    spec_mask=spec_mask,
+                    ref_wav_tensor=batch.wav_16k,
+                    cond=batch.cond,
+                    device=str(batch.y.device),
                 )
-
-            ref_wav = wav_16k_cpu.to(device=device)
-
-            mcd_dtw = self._compute_reconstruction_mcd_dtw(
-                aligner=aligner,
-                vocoder=vocoder,
-                features=features,
-                mel=mel,
-                spec_mask=spec_mask,
-                ref_wav_tensor=ref_wav,
-                cond=cond,
-            )
 
         return TIMITSampleResult(
             boundary_errors=boundary_errors,
@@ -361,79 +319,16 @@ class TIMITBenchMarker:
             posterior_entropy=posterior_entropy,
         )
 
-    def _get_silero_speech_span_16k(
-        self,
-        wav_16k: torch.Tensor,
-    ) -> tuple[int, int] | None:
-        """
-        Returns VAD speech span in 16k sample indices.
-
-        The waveform is peak-normalized to 0.6 only for Silero VAD.
-        This does not modify the actual model input waveform.
-        """
-        wav_16k = wav_16k.detach().float().cpu().view(-1)
-
-        # Peak-normalize only for VAD stability.
-        peak = wav_16k.abs().max()
-
-        if peak < 1e-7:
-            return None
-
-        wav_vad = wav_16k * (0.6 / peak)
-        wav_vad = torch.clamp(wav_vad, -1.0, 1.0)
-
-        speech_timestamps = get_speech_timestamps(
-            wav_vad,
-            self.silero_model,
-            sampling_rate=16000,
-            threshold=0.1,
-            neg_threshold=0.15,
-            min_speech_duration_ms=0,
-            min_silence_duration_ms=0,
-            speech_pad_ms=0,
-            return_seconds=False,
-            window_size_samples=512,
-        )
-
-        if not speech_timestamps:
-            return None
-
-        start = int(speech_timestamps[0]["start"])
-        end = int(speech_timestamps[-1]["end"])
-
-        start = max(0, min(start, wav_16k.numel()))
-        end = max(start, min(end, wav_16k.numel()))
-        if end <= start:
-            return None
-
-        return start, end
-
-    @staticmethod
-    def _compute_rms_gain(
-        rms_source: torch.Tensor,
-        rms_target: float,
-        eps: float = 1e-7,
-    ) -> float:
-        if rms_source.numel() == 0:
-            return 1.0
-
-        rms = torch.sqrt(torch.mean(rms_source.float() ** 2))
-
-        if rms < eps:
-            return 1.0
-
-        return float(rms_target / rms.item())
-
     @torch.no_grad()
     def _compute_reconstruction_mcd_dtw(
         self,
         aligner: NDAligner,
         vocoder: Generator,
         features: AlignerFeatures,
-        mel: torch.Tensor,
         spec_mask: torch.Tensor,
         ref_wav_tensor: torch.Tensor,
-        cond: torch.Tensor,
+        cond: torch.Tensor | None,
+        device: str,
     ) -> float:
         def normalize_wav_shape(wav: torch.Tensor) -> torch.Tensor:
             if wav.dim() == 3:
@@ -448,8 +343,6 @@ class TIMITBenchMarker:
             return wav
 
         assert aligner.spec_decoder is not None
-
-        device = mel.device
 
         vocoder = vocoder.to(device)
         vocoder.eval()
@@ -469,7 +362,6 @@ class TIMITBenchMarker:
         hyp_wav = normalize_wav_shape(hyp_wav)
 
         # HiFi-GAN vocoder is assumed to output 22050 Hz.
-        # TIMIT reference waveform is 16000 Hz, so resample hyp 22050 -> 16000.
         hyp_wav = AF.resample(
             waveform=hyp_wav,
             orig_freq=22050,
@@ -477,7 +369,6 @@ class TIMITBenchMarker:
         )
 
         ref_wav = normalize_wav_shape(ref_wav_tensor)
-
         ref_mask = torch.ones_like(ref_wav, dtype=ref_wav.dtype, device=ref_wav.device)
         hyp_mask = torch.ones_like(hyp_wav, dtype=hyp_wav.dtype, device=hyp_wav.device)
 
@@ -489,7 +380,6 @@ class TIMITBenchMarker:
             sampling_rate=16000,
             exclude_c0=True,
         )
-
         return score.mean().item()
 
     def _get_eval_instance(
@@ -502,21 +392,16 @@ class TIMITBenchMarker:
 
         token_starts: list[float] = []
         token_ends: list[float] = []
-
         current_frame = 0
 
         for dur in hard_dur:
             start_sec = max(0.0, current_frame * sec_per_frame)
-
             current_frame += int(dur)
-
             end_sec = max(0.0, current_frame * sec_per_frame)
-
             token_starts.append(start_sec)
             token_ends.append(end_sec)
 
         errors: list[float] = []
-
         for ref_slice, hyp_slice in zip(
             matched_words.ref_matched_indices,
             matched_words.hyp_matched_indices,
@@ -524,18 +409,12 @@ class TIMITBenchMarker:
         ):
             if ref_slice.start is None or ref_slice.stop is None:
                 raise ValueError(f"Invalid ref slice: {ref_slice}")
-
             if hyp_slice.start is None or hyp_slice.stop is None:
                 raise ValueError(f"Invalid hyp slice: {hyp_slice}")
 
             gt_start = wrd_segments[ref_slice.start].start_sample / self.ref_audio_sr
             gt_end = wrd_segments[ref_slice.stop - 1].end_sample / self.ref_audio_sr
 
-            # Important:
-            # hyp_slice itself excludes spaces/punctuation/BOS/EOS.
-            # But token_starts/token_ends are computed on the full timeline,
-            # so silence/space duration still affects the absolute onset time
-            # of the following word. This is what we want.
             pred_start = token_starts[hyp_slice.start]
             pred_end = token_ends[hyp_slice.stop - 1]
 
@@ -544,7 +423,8 @@ class TIMITBenchMarker:
 
         return errors
 
-    def _read_wrd(self, wrd_path: Path) -> list[TimitWordSegment]:
+    @staticmethod
+    def _read_wrd(wrd_path: Path) -> list[TimitWordSegment]:
         segments: list[TimitWordSegment] = []
         with open(wrd_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -561,15 +441,24 @@ class TIMITBenchMarker:
                 )
         return segments
 
-    def _read_txt(self, txt_path: Path) -> str:
+    @staticmethod
+    def _read_txt(txt_path: Path) -> str:
+        """
+        Read a TIMIT TXT transcript.
+
+        TIMIT TXT lines have the form:
+            <start_sample> <end_sample> <text>
+        Only <text> is passed to AlignerInputMaker.
+        """
         with open(txt_path, "r", encoding="utf-8") as f:
-            line = f.read().strip()
+            line = f.readline().strip()
+
         parts = line.split(maxsplit=2)
         if len(parts) == 3 and parts[0].isdigit() and parts[1].isdigit():
             return parts[2]
         return line
 
-    ## Optional Visualization prevate methods ##
+    ## Optional visualization private methods ##
 
     def _make_alignment_figure_path(
         self,
@@ -600,8 +489,6 @@ class TIMITBenchMarker:
         features: AlignerFeatures,
         t_mel: int,
     ) -> None:
-        # Lazy import keeps benchmark usable on systems where matplotlib is not
-        # needed. Agg is required for headless servers.
         import matplotlib
 
         matplotlib.use("Agg", force=True)
@@ -629,7 +516,6 @@ class TIMITBenchMarker:
         )
 
         raw_labels = [self._pretty_token_label(sym) for sym in hyp_symbols]
-
         total_rows = len(gt_labels) + len(collapsed_labels) + len(raw_labels)
         fig_height = max(9.0, min(36.0, 0.18 * total_rows))
 
@@ -646,14 +532,12 @@ class TIMITBenchMarker:
             y_labels=gt_labels,
             title="Ground Truth (TIMIT words)",
         )
-
         self._plot_alignment_matrix(
             ax=axes[1],
             mat=collapsed_mat,
             y_labels=collapsed_labels,
             title="Model Alignment (matched word spans collapsed)",
         )
-
         self._plot_alignment_matrix(
             ax=axes[2],
             mat=raw_align,
@@ -670,8 +554,6 @@ class TIMITBenchMarker:
         t_text: int,
         t_mel: int,
     ) -> torch.Tensor:
-        # Prefer an explicit Viterbi/hard-path tensor if the model returns one.
-        # Otherwise, reconstruct the same hard alignment from hard_dur.
         for attr_name in ("viterbi_path", "hard_path", "path", "attn_hard"):
             value = getattr(features, attr_name, None)
             mat = self._coerce_path_tensor_to_alignment_matrix(
@@ -698,9 +580,6 @@ class TIMITBenchMarker:
             return None
 
         path = value.detach().float().cpu()
-
-        # Common cases:
-        #   (B, T_text, T_mel), (B, T_mel, T_text), (T_text, T_mel), (T_mel, T_text)
         while path.dim() > 2 and path.size(0) == 1:
             path = path.squeeze(0)
 
@@ -709,14 +588,11 @@ class TIMITBenchMarker:
                 return path
             if path.shape == (t_mel, t_text):
                 return path.transpose(0, 1)
-
-            # If an extra singleton channel remains, remove it and retry once.
             if path.size(0) == 1 and path.numel() == t_text * t_mel:
                 return path.reshape(t_text, t_mel)
             if path.size(1) == 1 and path.numel() == t_text * t_mel:
                 return path.reshape(t_text, t_mel)
 
-        # Index path case: one text-state index per mel frame.
         if path.dim() == 1 and path.numel() == t_mel:
             indices = path.long().clamp(min=0, max=t_text - 1)
             mat = torch.zeros(t_text, t_mel, dtype=torch.float32)
@@ -732,18 +608,15 @@ class TIMITBenchMarker:
         t_mel: int,
     ) -> torch.Tensor:
         mat = torch.zeros(t_text, t_mel, dtype=torch.float32)
-
         cur = 0
         for text_idx, dur in enumerate(hard_dur[:t_text]):
             dur = int(dur)
             if dur <= 0:
                 continue
-
             end = min(t_mel, cur + dur)
             if cur < t_mel and end > cur:
                 mat[text_idx, cur:end] = 1.0
             cur += dur
-
         return mat
 
     def _build_ground_truth_word_matrix(
@@ -752,7 +625,6 @@ class TIMITBenchMarker:
         t_mel: int,
     ) -> tuple[torch.Tensor, list[str]]:
         sec_per_frame = self.hyp_hop_length / self.hyp_audio_sr
-
         mat = torch.zeros(len(wrd_segments), t_mel, dtype=torch.float32)
         labels: list[str] = []
 
@@ -781,10 +653,8 @@ class TIMITBenchMarker:
         matched_words: MatchedWords,
     ) -> tuple[torch.Tensor, list[str]]:
         t_text, t_mel = raw_align.shape
-
         collapsed_labels: list[str] = []
         token_to_collapsed_row: dict[int, int] = {}
-
         match_by_hyp_start: dict[int, tuple[slice, slice]] = {}
         matched_token_indices: set[int] = set()
 
@@ -817,9 +687,6 @@ class TIMITBenchMarker:
                 token_idx = hyp_slice.stop
                 continue
 
-            # Tokens inside a matched span should have been consumed at the span start.
-            # If this ever happens because of malformed/overlapping slices, skip them
-            # instead of creating duplicate rows.
             if token_idx in matched_token_indices:
                 token_idx += 1
                 continue
@@ -830,7 +697,6 @@ class TIMITBenchMarker:
             token_idx += 1
 
         collapsed_mat = torch.zeros(len(collapsed_labels), t_mel, dtype=torch.float32)
-
         for token_idx in range(t_text):
             row_idx = token_to_collapsed_row.get(token_idx)
             if row_idx is None:
@@ -881,11 +747,11 @@ class TIMITBenchMarker:
         return token
 
     @staticmethod
-    def _make_mel_mask(
+    def _make_spec_mask(
         y_lengths: torch.Tensor,
-        t_mel: int,
+        t_spec: int,
         dtype: torch.dtype,
         device: torch.device,
     ) -> torch.Tensor:
-        idx = torch.arange(t_mel, device=device).unsqueeze(0)
+        idx = torch.arange(t_spec, device=device).unsqueeze(0)
         return (idx < y_lengths.unsqueeze(1)).to(dtype=dtype)

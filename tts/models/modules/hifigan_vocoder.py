@@ -25,6 +25,7 @@ def get_padding(
 
 
 LRELU_SLOPE = 0.1
+HIFIGAN_HOP_LENGTH = 256
 
 
 class ResBlock1(torch.nn.Module):

@@ -316,6 +316,12 @@ wheels = [
 ]
 
 [[package]]
+name = "distance"
+version = "0.1.3"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/5c/1a/883e47df323437aefa0d0a92ccfb38895d9416bd0b56262c2e46a47767b8/Distance-0.1.3.tar.gz", hash = "sha256:60807584f5b6003f5c521aa73f39f51f631de3be5cccc5a1d67166fcbf0d4551", size = 180271, upload-time = "2013-11-21T00:14:34.152Z" }
+
+[[package]]
 name = "dlinfo"
 version = "2.0.0"
 source = { registry = "https://pypi.org/simple" }
@@ -392,6 +398,21 @@ source = { registry = "https://download.pytorch.org/whl/cu128" }
 sdist = { url = "https://files.pythonhosted.org/packages/b6/27/954057b0d1f53f086f681755207dda6de6c660ce133c829158e8e8fe7895/fsspec-2025.12.0.tar.gz", hash = "sha256:c505de011584597b1060ff778bb664c1bc022e87921b0e4f10cc9c44f9635973" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/51/c7/b64cae5dba3a1b138d7123ec36bb5ccd39d39939f18454407e5468f4763f/fsspec-2025.12.0-py3-none-any.whl", hash = "sha256:8bf1fe301b7d8acfa6e8571e3b1c3d158f909666642431cc78a1b7b4dbc5ec5b" },
+]
+
+[[package]]
+name = "g2p-en"
+version = "2.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "distance" },
+    { name = "inflect" },
+    { name = "nltk" },
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/5f/22/2c7acbe6164ed6cfd4301e9ad2dbde69c68d22268a0f9b5b0ee6052ed3ab/g2p_en-2.1.0.tar.gz", hash = "sha256:32ecb119827a3b10ea8c1197276f4ea4f44070ae56cbbd01f0f261875f556a58", size = 3116166, upload-time = "2019-12-31T01:16:12.753Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/d7/d9/b77dc634a7a0c0c97716ba97dd0a28cbfa6267c96f359c4f27ed71cbd284/g2p_en-2.1.0-py3-none-any.whl", hash = "sha256:2a7aabf1fc7f270fcc3349881407988c9245173c2413debbe5432f4a4f31319f", size = 3117464, upload-time = "2019-12-31T01:16:03.286Z" },
 ]
 
 [[package]]
@@ -483,6 +504,19 @@ version = "3.4"
 source = { registry = "https://download.pytorch.org/whl/cu128" }
 wheels = [
     { url = "https://download.pytorch.org/whl/idna-3.4-py3-none-any.whl", hash = "sha256:90b77e79eaa3eba6de819a0c442c0b4ceefc341a7a2ab77d7562bf49f425c5c2", upload-time = "2023-10-06T21:35:40Z" },
+]
+
+[[package]]
+name = "inflect"
+version = "7.5.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "more-itertools" },
+    { name = "typeguard" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/78/c6/943357d44a21fd995723d07ccaddd78023eace03c1846049a2645d4324a3/inflect-7.5.0.tar.gz", hash = "sha256:faf19801c3742ed5a05a8ce388e0d8fe1a07f8d095c82201eb904f5d27ad571f", size = 73751, upload-time = "2024-12-28T17:11:18.897Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/8a/eb/427ed2b20a38a4ee29f24dbe4ae2dafab198674fe9a85e3d6adf9e5f5f41/inflect-7.5.0-py3-none-any.whl", hash = "sha256:2aea70e5e70c35d8350b8097396ec155ffd68def678c7ff97f51aa69c1d92344", size = 35197, upload-time = "2024-12-28T17:11:15.931Z" },
 ]
 
 [[package]]
@@ -836,6 +870,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/40/49/0f8c498a28c0efa5f5c95a9e374c83ec1385ca41d0e85e7cf40e5d519a21/ml_dtypes-0.5.4-cp313-cp313t-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:531eff30e4d368cb6255bc2328d070e35836aa4f282a0fb5f3a0cd7260257298", size = 5366453, upload-time = "2025-11-17T22:32:07.115Z" },
     { url = "https://files.pythonhosted.org/packages/8c/27/12607423d0a9c6bbbcc780ad19f1f6baa2b68b18ce4bddcdc122c4c68dc9/ml_dtypes-0.5.4-cp313-cp313t-win_amd64.whl", hash = "sha256:cb73dccfc991691c444acc8c0012bee8f2470da826a92e3a20bb333b1a7894e6", size = 225612, upload-time = "2025-11-17T22:32:08.615Z" },
     { url = "https://files.pythonhosted.org/packages/e5/80/5a5929e92c72936d5b19872c5fb8fc09327c1da67b3b68c6a13139e77e20/ml_dtypes-0.5.4-cp313-cp313t-win_arm64.whl", hash = "sha256:3bbbe120b915090d9dd1375e4684dd17a20a2491ef25d640a908281da85e73f1", size = 164145, upload-time = "2025-11-17T22:32:09.782Z" },
+]
+
+[[package]]
+name = "more-itertools"
+version = "11.1.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/de/1d/f4da6f02cdffe04d6362210b807146a26044c88d839208aec273bb0d9184/more_itertools-11.1.0.tar.gz", hash = "sha256:48e8f4d9e7e5878571ecf6f2b4e57634f93cd474cc8cfbd2376f2d11b396e30d", size = 145772, upload-time = "2026-05-22T14:14:29.909Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/3d/1087453384dbde46a8c7f9356eead2c58be8a7bf156bca40243377c85715/more_itertools-11.1.0-py3-none-any.whl", hash = "sha256:4b65538ae22f6fed0ce4874efd317463a7489796a0939fa66824dd542125a192", size = 72226, upload-time = "2026-05-22T14:14:28.824Z" },
 ]
 
 [[package]]
@@ -1496,6 +1539,18 @@ wheels = [
 ]
 
 [[package]]
+name = "pyworld"
+version = "0.3.5"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/a5/0f/c78d631ffbb4c1aaebf80ff2bf9e791213b381dbe404f9ce1a3eb3672931/pyworld-0.3.5.tar.gz", hash = "sha256:1b93e53cddb67a0e4faa34d6cf919ac6c662feb1c8c0ed901d71b595ab396aa3", size = 261021, upload-time = "2025-01-20T16:07:51.261Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/6f/5c/7e8fb5417ef96cbeca125b5ee507ec5568ce4bde7b576d20db2d2d4a80fc/pyworld-0.3.5-cp313-cp313-win_amd64.whl", hash = "sha256:860c5c3528f1dbc5c68fa71a16e3bb6990244619e5b9baf62952f3a6bfc6131c", size = 222371, upload-time = "2025-01-21T15:59:08.319Z" },
+]
+
+[[package]]
 name = "pyyaml"
 version = "6.0.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1982,6 +2037,15 @@ wheels = [
 ]
 
 [[package]]
+name = "tgt"
+version = "1.5"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/ae/e8/a70c578bc9b9d33c8dd95ed8a251df0010ab545b682690ccf68a5e80d9cf/tgt-1.5.tar.gz", hash = "sha256:9f64b0fda6fec0f99471f2c5a73000792f46791a69f2ffb04b58f4499110e0aa", size = 32181, upload-time = "2023-12-18T09:31:09.695Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e1/b2/98c733f6ef24e1f29b23f0f536e5e2fbcadc56493c9a36be7ff7a8181638/tgt-1.5-py3-none-any.whl", hash = "sha256:df4566f0f9b1765691dcc984a78963496bca961a27ac7f10050be2db277df5e8", size = 41576, upload-time = "2023-12-18T09:31:07.864Z" },
+]
+
+[[package]]
 name = "threadpoolctl"
 version = "3.6.0"
 source = { registry = "https://pypi.org/simple" }
@@ -2120,8 +2184,10 @@ dependencies = [
     { name = "dacite" },
     { name = "einops" },
     { name = "fastdtw" },
+    { name = "g2p-en" },
     { name = "glob2" },
     { name = "huggingface-hub" },
+    { name = "inflect" },
     { name = "ipykernel" },
     { name = "librosa" },
     { name = "matplotlib" },
@@ -2134,11 +2200,13 @@ dependencies = [
     { name = "phonemizer" },
     { name = "pysptk" },
     { name = "pytest" },
+    { name = "pyworld" },
     { name = "scipy" },
     { name = "silero-vad" },
     { name = "soundfile" },
     { name = "speechbrain" },
     { name = "tensorboard" },
+    { name = "tgt" },
     { name = "torch" },
     { name = "torchaudio" },
     { name = "tqdm" },
@@ -2152,8 +2220,10 @@ requires-dist = [
     { name = "dacite", specifier = ">=1.9.2" },
     { name = "einops", specifier = ">=0.8.2" },
     { name = "fastdtw", specifier = ">=0.3.4" },
+    { name = "g2p-en", specifier = ">=2.1.0" },
     { name = "glob2", specifier = ">=0.7" },
     { name = "huggingface-hub", specifier = "<1.0" },
+    { name = "inflect", specifier = ">=7.5.0" },
     { name = "ipykernel", specifier = ">=7.2.0" },
     { name = "librosa", specifier = ">=0.11.0" },
     { name = "matplotlib", specifier = ">=3.10.8" },
@@ -2166,11 +2236,13 @@ requires-dist = [
     { name = "phonemizer", specifier = ">=3.3.0" },
     { name = "pysptk", specifier = ">=1.0.1" },
     { name = "pytest", specifier = ">=9.0.2" },
+    { name = "pyworld", specifier = ">=0.3.5" },
     { name = "scipy", specifier = ">=1.17.1" },
     { name = "silero-vad", specifier = ">=6.2.1" },
     { name = "soundfile", specifier = ">=0.13.1" },
     { name = "speechbrain", specifier = ">=1.0.0" },
     { name = "tensorboard", specifier = ">=2.20.0" },
+    { name = "tgt", specifier = ">=1.5" },
     { name = "torch", specifier = ">=2.10.0" },
     { name = "torchaudio", specifier = ">=2.10.0" },
     { name = "tqdm", specifier = ">=4.66.5" },
@@ -2180,6 +2252,18 @@ requires-dist = [
 
 [package.metadata.requires-dev]
 dev = []
+
+[[package]]
+name = "typeguard"
+version = "4.5.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/67/1c/dfba5c4633cafc4c701f237d2ba63b416805047fd6d96aab4cfc40969f98/typeguard-4.5.2.tar.gz", hash = "sha256:5a16dcac23502039299c97c8941651bc33d7ea8cc4b2f7d6bbb1b528f6eea423", size = 80240, upload-time = "2026-05-14T12:59:40.857Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5b/29/74eeb4d3f3ae61ca096b018ad486b3b3c74b17bec09ab4edab721cbefec3/typeguard-4.5.2-py3-none-any.whl", hash = "sha256:fcf9de18bd945cdb4c7b996e12b4c51ce83f92f191314a6d7cf1739586ec98cf", size = 36748, upload-time = "2026-05-14T12:59:39.473Z" },
+]
 
 [[package]]
 name = "typing-extensions"

@@ -1,5 +1,4 @@
 import argparse
-import math
 import os
 from typing import Any, NamedTuple, cast, override
 
@@ -7,29 +6,28 @@ import torch
 from torch.utils.data import DataLoader
 
 from tts.benchmark.timit.benchmarker import TIMITBenchMarker
-from tts.benchmark.timit.word_mapper import HYP_IGNORE_SYMBOLS
 from tts.config.ndaligner.data_config import DataConfig, LossConfigs, TrainConfigs
 from tts.config.ndaligner.training_module_config import NDAlignerTrainingModuleConfigs
 from tts.config.utils.io import load_config, save_config
 from tts.data.data_types import LossValues, TTSBatch
+from tts.data.quantile_bucket_sampler import QuantileDurationBatchSampler
 from tts.data.tts_datafactory import TTSDataFactory
 from tts.logger.timit_logger import NDAlignerTimitLogger
 from tts.logger.utils.plot_alignment import plot_alignment
 from tts.logger.utils.plot_spectrogram import plot_spectrogram
-from tts.models.init_ndaligner import init_nd_aligner_training_module
 from tts.models.ndaligner import (
     AlignerForward,
     NDAlignerLossWeights,
     NDAlignerTrainingModule,
     NDAlignerTrainingModuleForward,
+    init_nd_aligner_training_module,
 )
-from tts.tokenizer.text_tokenizer import TextTokenizer
+from tts.tokenizer.load_tokenizer import load_tokenizer
 from tts.utils.anneal import get_linear_anneal_weight
 from tts.utils.checkpoint_manager import CheckpointManager
+from tts.utils.set_seed import set_seed
 
 from .base_trainer import BaseTrainer
-
-TEXT_TOKENIZER = TextTokenizer()
 
 
 class TimitCheckpointMetric(NamedTuple):
@@ -94,7 +92,6 @@ class NDAlignerTrainer(
         print("🏗️ Initializing model...")
         model = init_nd_aligner_training_module(
             config=self.model_config,
-            load_speaker_encoder=self.data_config.extra_exp.train_time_eval_logging,
             load_vocoder=self.data_config.extra_exp.train_time_eval_logging,
             device=str(self.device),
         )
@@ -121,8 +118,12 @@ class NDAlignerTrainer(
 
         self.train_time_eval_logger = None
         self.timit_ckpt_manager = None
+
+        self.tokenizer = load_tokenizer(self.model_config.nd_aligner.tokenizer_type)
+
         if self.data_config.extra_exp.train_time_eval_logging:
-            from tts.preprocess.config import PreprocessConfig
+
+            assert self.model.nd_aligner.input_maker is not None
 
             print("🧪 Train-time TIMIT eval is on.")
             timit_benchmarker = TIMITBenchMarker(
@@ -130,13 +131,9 @@ class NDAlignerTrainer(
                 ref_audio_sr=self.data_config.extra_exp.timit_sr,
                 hyp_audio_sr=self.data_config.audio.sr,
                 hyp_hop_length=self.data_config.audio.hop_length,
-                tokenizer=TEXT_TOKENIZER,
-                audio_config=self.data_config.audio,
-                hyp_ignore_symbols=HYP_IGNORE_SYMBOLS,
-                max_ref_words_per_hyp_word=5,
-                spk_cond_dim=self.model_config.nd_aligner.spec_enc.cond_dim,
-                rms_normalize=PreprocessConfig.rms_normalize,
-                rms_target=PreprocessConfig.rms_target,
+                input_maker=self.model.nd_aligner.input_maker,
+                hyp_ignore_symbols=self.tokenizer.ignore_symbols,
+                seed=self.data_config.dataset.seed,
             )
 
             self.train_time_eval_logger = NDAlignerTimitLogger(
@@ -172,6 +169,16 @@ class NDAlignerTrainer(
         data_factory = TTSDataFactory(self.data_config)
         return data_factory.train_loader, data_factory.valid_loader
 
+    @override
+    def on_train_epoch_start(self, epoch: int) -> None:
+        assert self.train_loader is not None
+
+        batch_sampler = cast(
+            QuantileDurationBatchSampler,
+            self.train_loader.batch_sampler,
+        )
+        batch_sampler.set_epoch(epoch)
+
     def _get_loss_weights(self, step: int) -> NDAlignerLossWeights:
         """Calculates current weighted objective coefficients for NDAlignerTrainingModule."""
         cfg: LossConfigs = self.data_config.loss
@@ -205,13 +212,6 @@ class NDAlignerTrainer(
                 cfg.viterbi_kl_init_weight,
                 cfg.viterbi_kl_final_weight,
             ),
-            viterbi_ot_loss_weight=get_linear_anneal_weight(
-                step,
-                cfg.viterbi_ot_start_step,
-                cfg.viterbi_ot_end_step,
-                cfg.viterbi_ot_init_weight,
-                cfg.viterbi_ot_final_weight,
-            ),
         )
 
     def _build_loss_values(self, out: AlignerForward) -> LossValues:
@@ -220,7 +220,6 @@ class NDAlignerTrainer(
             crf=out.crf_loss.item(),
             diag=out.diag_loss.item(),
             viterbi_kl=out.viterbi_kl_loss.item(),
-            viterbi_ot=out.viterbi_ot_loss.item(),
         )
 
     @override
@@ -234,14 +233,14 @@ class NDAlignerTrainer(
         self.model: NDAlignerTrainingModule
 
         x, x_lengths = batch.text, batch.text_lengths
-        y, y_lengths = batch.spec, batch.spec_lengths
+        y, y_lengths = batch.spec, batch.spec_lengths  # mel or linspec.
+        y_recon, y_recon_lengths = batch.recon_spec, batch.recon_spec_lengths  # always mel.
+
         cond = batch.cond
 
         loss_weights = self._get_loss_weights(step)
 
-        compute_viterbi_loss = (loss_weights.viterbi_kl_loss_weight > 0.0) or (
-            loss_weights.viterbi_ot_loss_weight > 0.0
-        )
+        compute_viterbi_loss = loss_weights.viterbi_kl_loss_weight > 0.0
         compute_diagonal_loss = loss_weights.diag_loss_weight > 0.0
 
         forward_out = cast(
@@ -253,6 +252,8 @@ class NDAlignerTrainer(
                 y_lengths=y_lengths,
                 cond=cond,
                 loss_weights=loss_weights,
+                y_recon=y_recon,
+                y_recon_lengths=y_recon_lengths,
                 compute_viterbi_loss=compute_viterbi_loss,
                 compute_diagonal_loss=compute_diagonal_loss,
             ),
@@ -274,6 +275,8 @@ class NDAlignerTrainer(
         metrics: LossValues,
         output: AlignerForward,
     ):
+        assert self.optimizer is not None
+
         if is_step_boundary and (step % self.train_cfg.log_interval == 0 or step == 1):
             curr_lr = self.optimizer.param_groups[0]["lr"]
             print(
@@ -316,7 +319,10 @@ class NDAlignerTrainer(
         step: int,
     ) -> tuple[float, LossValues, AlignerForward]:
         x, x_len = batch.text, batch.text_lengths
-        y, y_len = batch.spec, batch.spec_lengths
+
+        y, y_len = batch.spec, batch.spec_lengths  # mel or linspec.
+        y_recon, y_recon_len = batch.recon_spec, batch.recon_spec_lengths  # always mel.
+
         cond = batch.cond
 
         loss_weights = self._get_loss_weights(step)
@@ -331,6 +337,8 @@ class NDAlignerTrainer(
                 y_lengths=y_len,
                 cond=cond,
                 loss_weights=loss_weights,
+                y_recon=y_recon,
+                y_recon_lengths=y_recon_len,
                 compute_viterbi_loss=True,
                 compute_diagonal_loss=compute_diagonal_loss,
             ),
@@ -342,7 +350,7 @@ class NDAlignerTrainer(
         return forward_out.loss.item(), unweighted_losses, out
 
     @override
-    def on_validation_epoch_end(
+    def on_valid_epoch_end(
         self,
         epoch: int,
         step: int,
@@ -388,12 +396,13 @@ class NDAlignerTrainer(
         assert self.logger is not None
 
         s_len = int(batch.spec_lengths[0].item())
+        recon_len = int(batch.recon_spec_lengths[0].item())
         t_len = int(batch.text_lengths[0].item())
         tokens = self._decode_token_labels(batch.text[0, :t_len])
 
         self.logger.log_figure(
             f"{prefix}/GT_Mel",
-            plot_spectrogram(batch.spec[0, :, :s_len]),
+            plot_spectrogram(batch.recon_spec[0, :, :recon_len]),
             step,
         )
         self.logger.log_figure(
@@ -401,6 +410,13 @@ class NDAlignerTrainer(
             plot_spectrogram(out.recon[0, :s_len].transpose(0, 1)),
             step,
         )
+
+        if self.data_config.audio.feature_type != "mel":
+            self.logger.log_figure(
+                f"{prefix}/Alignment_Input_Feature",
+                plot_spectrogram(batch.spec[0, :, :s_len]),
+                step,
+            )
 
         # ------------------------------------------------------------------
         # Alignment maps
@@ -496,11 +512,73 @@ class NDAlignerTrainer(
         # Audio logging
         # ------------------------------------------------------------------
         if self.model.vocoder is not None:
-            hop_length = self.data_config.audio.hop_length
-            audio_len = s_len * hop_length
+            import math
+
+            import torch.nn.functional as F
+
+            from tts.models.modules.hifigan_vocoder import HIFIGAN_HOP_LENGTH
+
+            hop_length = int(self.data_config.audio.hop_length)
+
+            if torch.is_tensor(recon_len):
+                recon_len_int = int(recon_len.item())
+            else:
+                recon_len_int = int(recon_len)
+
+            # Original target audio length under the dataset mel hop.
+            audio_len = recon_len_int * hop_length
+
             script = batch.scripts[0]
 
-            wav_gt = self.model.mel2wav(batch.spec[:1])
+            recon_spec_gt = batch.recon_spec[:1]
+            recon_spec_hat = out.recon[:1]
+
+            num_mels = int(self.model.vocoder.h.num_mels)
+
+            # Convert both specs to vocoder format: (B, n_mels, T)
+            if recon_spec_gt.shape[1] != num_mels:
+                recon_spec_gt = recon_spec_gt.transpose(1, 2)
+
+            if recon_spec_hat.shape[1] != num_mels:
+                recon_spec_hat = recon_spec_hat.transpose(1, 2)
+
+            # Crop to the valid reconstruction length before interpolation.
+            # This avoids interpolating padded mel frames.
+            recon_spec_gt = recon_spec_gt[..., :recon_len_int]
+            recon_spec_hat = recon_spec_hat[..., :recon_len_int]
+
+            if hop_length != HIFIGAN_HOP_LENGTH:
+                # Number of mel frames required by the HiFi-GAN vocoder so that
+                # vocoder_len * HIFIGAN_HOP_LENGTH covers the original audio length.
+                vocoder_len = max(
+                    1,
+                    math.ceil(audio_len / HIFIGAN_HOP_LENGTH),
+                )
+
+                recon_spec_gt = F.interpolate(
+                    recon_spec_gt,
+                    size=vocoder_len,
+                    mode="linear",
+                    align_corners=False,
+                )
+
+                recon_spec_hat = F.interpolate(
+                    recon_spec_hat,
+                    size=vocoder_len,
+                    mode="linear",
+                    align_corners=False,
+                )
+
+            wav_gt = self.model.mel2wav(recon_spec_gt)
+            wav_hat = self.model.mel2wav(recon_spec_hat)
+
+            # Safety clamp in case the vocoder output is slightly shorter than expected.
+            audio_len = min(
+                audio_len,
+                wav_gt.shape[-1],
+                wav_hat.shape[-1],
+            )
+
             self.logger.log_audio(
                 f"{prefix}/GT_Audio",
                 wav_gt[0, :, :audio_len],
@@ -508,13 +586,13 @@ class NDAlignerTrainer(
                 self.data_config.audio.sr,
             )
 
-            wav_hat = self.model.mel2wav(out.recon[:1])
             self.logger.log_audio(
                 f"{prefix}/Predicted_Audio",
                 wav_hat[0, :, :audio_len],
                 step,
                 self.data_config.audio.sr,
             )
+
             self.logger.log_text(f"{prefix}/Script", script, step)
 
     @override
@@ -522,20 +600,17 @@ class NDAlignerTrainer(
         if self.train_time_eval_logger is not None:
             from pathlib import Path
 
-            from tts.preprocess.config import PreprocessConfig
+            assert self.model.nd_aligner.input_maker is not None
 
             timit_benchmarker = TIMITBenchMarker(
                 root_dir=self.data_config.extra_exp.timit_test_root_dir,
                 ref_audio_sr=self.data_config.extra_exp.timit_sr,
                 hyp_audio_sr=self.data_config.audio.sr,
                 hyp_hop_length=self.data_config.audio.hop_length,
-                tokenizer=TEXT_TOKENIZER,
-                audio_config=self.data_config.audio,
-                hyp_ignore_symbols=HYP_IGNORE_SYMBOLS,
+                input_maker=self.model.nd_aligner.input_maker,
+                hyp_ignore_symbols=self.tokenizer.ignore_symbols,
                 max_ref_words_per_hyp_word=5,
-                spk_cond_dim=self.model_config.nd_aligner.spec_enc.cond_dim,
-                rms_normalize=PreprocessConfig.rms_normalize,
-                rms_target=PreprocessConfig.rms_target,
+                seed=self.data_config.dataset.seed,
             )
 
             self.train_time_eval_logger = NDAlignerTimitLogger(
@@ -558,25 +633,7 @@ class NDAlignerTrainer(
             + f"crf={losses.crf:.4f} | "
             + f"diag={losses.diag:.4f} | "
             + f"viterbi_kl={losses.viterbi_kl:.4f} | "
-            + f"viterbi_ot={losses.viterbi_ot:.4f}"
         )
-
-    def _metric_log_dict(
-        self,
-        metrics: LossValues,
-    ) -> dict[str, float]:
-        values = metrics._asdict()
-
-        log_dict: dict[str, float] = {}
-
-        for key, value in values.items():
-            if key.endswith("_acc"):
-                name = key.removesuffix("_acc")
-                log_dict[f"{name.capitalize()}_Acc"] = value
-            else:
-                log_dict[f"{key.capitalize()}_Loss"] = value
-
-        return log_dict
 
     @staticmethod
     def _normalize_log_map_over_states(
@@ -622,8 +679,10 @@ class NDAlignerTrainer(
         x_norm = x_norm.masked_fill(~valid_mask, 0.0)
         return x_norm
 
-    @staticmethod
-    def _decode_token_labels(token_ids: torch.Tensor) -> list[str]:
+    def _decode_token_labels(
+        self,
+        token_ids: torch.Tensor,
+    ) -> list[str]:
         """
         Decode token ids into per-token IPA/BOS/EOS labels for y-axis plotting.
 
@@ -636,7 +695,7 @@ class NDAlignerTrainer(
         token_ids = token_ids.detach().cpu().long().view(-1)
 
         return [
-            cast(str, TEXT_TOKENIZER.decode(token_ids[i : i + 1])) for i in range(token_ids.numel())
+            cast(str, self.tokenizer.decode(token_ids[i : i + 1])) for i in range(token_ids.numel())
         ]
 
     @staticmethod
@@ -661,6 +720,7 @@ class NDAlignerTrainer(
         step: int,
         is_test: bool = False,
     ) -> None:
+        assert self.optimizer is not None
         self.model: NDAlignerTrainingModule
 
         assert self.train_time_eval_logger is not None
@@ -668,8 +728,8 @@ class NDAlignerTrainer(
         was_training = self.model.training
 
         self.model.eval()
-        assert self.model.speaker_encoder is not None
         assert self.model.vocoder is not None
+        assert self.model.nd_aligner.input_maker is not None
 
         if (
             self.timit_ckpt_manager is not None and is_test
@@ -677,12 +737,12 @@ class NDAlignerTrainer(
             best_ckpt_path = self.timit_ckpt_manager.get_best_checkpoint_path()
             self.model.load_checkpoint(best_ckpt_path, device=self.device)
 
-        row = self.train_time_eval_logger(
+        row = self.train_time_eval_logger.__call__(
             epoch=epoch,
             step=step,
             aligner=self.model.nd_aligner,
-            speaker_encoder=self.model.speaker_encoder,
             vocoder=self.model.vocoder,
+            is_test=is_test,
         )
 
         print(
@@ -734,9 +794,8 @@ class NDAlignerTrainer(
             self.model.train()
 
 
-def main():
+def main():  #
     # torch.backends.cudnn.benchmark = False
-    # torch.backends.cudnn.deterministic = True
 
     parser = argparse.ArgumentParser(description="Train Stage 1 Monotonic TTS")
     parser.add_argument("-c", "--data_config", type=str, help="Path to data config JSON")
@@ -749,6 +808,11 @@ def main():
         load_config(args.train_module_config, NDAlignerTrainingModuleConfigs)
         if args.train_module_config
         else NDAlignerTrainingModuleConfigs()
+    )
+
+    set_seed(
+        seed=data_config.train.seed,
+        deterministic=True,
     )
 
     trainer = NDAlignerTrainer(

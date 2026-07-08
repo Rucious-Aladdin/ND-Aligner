@@ -1,17 +1,90 @@
+import dataclasses
 from typing import NamedTuple, cast, override
 
 import torch
 import torch.nn.functional as F
 
-from tts.models.modules.crf_aligner import MonotonicCRFAligner
+from tts.models.modules.crf_aligner import LinearCRFAligner
 from tts.models.modules.hifigan_vocoder import Generator
 from tts.models.modules.spec_decoder import SpecDecoder
 from tts.models.modules.spec_encoder import SpecEncoder
-from tts.models.modules.spk_encoder import ECAPASpeakerEncoder
 from tts.models.modules.text_encoder import TextEncoder
+from tts.models.utils.input_maker import AlignerInputMaker
 from tts.models.utils.sequence_mask import sequence_mask
 
-from .base_model import BaseModel
+from ..config.ndaligner.model_config import NDAlignerConfigs
+from ..config.ndaligner.training_module_config import NDAlignerTrainingModuleConfigs
+from .utils.base_model import BaseModel
+
+
+def init_nd_aligner(
+    config: NDAlignerConfigs | None = None,
+    load_input_maker: bool = True,
+    device: str = "cpu",
+):
+
+    if config is None:
+        config = NDAlignerConfigs()
+
+    text_encoder = TextEncoder(**dataclasses.asdict(config.txt_enc))
+    spec_encoder = SpecEncoder(**dataclasses.asdict(config.spec_enc))
+    aligner = LinearCRFAligner(**dataclasses.asdict(config.aligner))
+    spec_decoder = SpecDecoder(**dataclasses.asdict(config.spec_dec))
+
+    # for inference
+
+    if load_input_maker:
+        input_maker = AlignerInputMaker(
+            audio_config=config.audio,
+            preprocess_config=config.preprocess,
+            tokenizer_type=config.tokenizer_type,
+            fastspeech2_lexicon_path=config.fastspeech2_tokenizer_lexion_path,
+            device=device,
+        )
+    else:
+        input_maker = None
+
+    model = NDAligner(
+        text_encoder=text_encoder,
+        spec_encoder=spec_encoder,
+        crf_aligner=aligner,
+        spec_decoder=spec_decoder,
+        input_maker=input_maker,
+        use_delta_feat=config.use_delta_feat,
+        use_delta_delta_feat=config.use_delta_delta_feat,
+        use_optional_skip_sep=config.use_optional_skip_sep,
+        separator_token_id=config.separator_token_id,
+    )
+
+    return model.to(device)
+
+
+def init_nd_aligner_training_module(
+    config: NDAlignerTrainingModuleConfigs | None = None,
+    load_vocoder: bool = False,
+    device: str = "cpu",
+):
+
+    if config is None:
+        config = NDAlignerTrainingModuleConfigs()
+
+    nd_aligner = init_nd_aligner(
+        config=config.nd_aligner,
+        device=device,
+    )
+
+    vocoder = None
+
+    if load_vocoder:
+        vocoder = Generator.from_config_path(
+            config_path=config.vocoder.config_path,
+            ckpt_path=config.vocoder.ckpt_path,
+        ).to(device)
+
+    return NDAlignerTrainingModule(
+        nd_aligner=nd_aligner,
+        vocoder=vocoder,
+    )
 
 
 class AlignerForward(NamedTuple):
@@ -48,7 +121,6 @@ class AlignerForward(NamedTuple):
     diag_loss: torch.Tensor
     recon_loss: torch.Tensor
     viterbi_kl_loss: torch.Tensor
-    viterbi_ot_loss: torch.Tensor
 
 
 class AlignerFeatures(NamedTuple):
@@ -226,49 +298,18 @@ def compute_viterbi_kl_loss(
     return loss
 
 
-def compute_viterbi_ot_loss(
-    log_gamma: torch.Tensor,
-    viterbi_attn: torch.Tensor,
-    text_mask: torch.Tensor,
-    spec_mask: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Computes a frame-wise 1D Optimal Transport loss between the predicted
-    alignment distribution and the hard Viterbi alignment path.
-
-    This uses the discrete 1D Wasserstein-1 distance on the text-token axis:
-        W1(p, q) = sum_j |CDF_p(j) - CDF_q(j)|
-
-    Args:
-        log_gamma (torch.Tensor): Log-likelihood / logit matrix of shape (B, T_mel, T_text).
-        viterbi_attn (torch.Tensor): Binary hard alignment path (B, T_mel, T_text).
-        text_mask (torch.Tensor): Binary mask for text tokens (B, T_text) or (B, 1, T_text).
-        spec_mask (torch.Tensor): Binary mask for spectrogram (B, T_mel).
-
-    Returns:
-        torch.Tensor: Scalar tensor representing the averaged frame-wise OT loss.
-    """
-    if text_mask.dim() == 2:
-        text_mask = text_mask.unsqueeze(1)  # (B, 1, T_text)
-    masked_log_gamma = log_gamma.masked_fill(text_mask == 0, -1e4)
-    pred_attn = torch.softmax(masked_log_gamma, dim=-1)
-    ot_diff = (pred_attn.cumsum(dim=-1) - viterbi_attn.cumsum(dim=-1)).abs()
-    ot_per_frame = (ot_diff * text_mask).sum(dim=-1)
-    masked_ot = ot_per_frame * spec_mask
-    loss = masked_ot.sum() / (spec_mask.sum() + 1e-8)
-
-    return loss
-
-
 class NDAligner(BaseModel):
     def __init__(
         self,
         text_encoder: TextEncoder,
         spec_encoder: SpecEncoder,
-        crf_aligner: MonotonicCRFAligner,
+        crf_aligner: LinearCRFAligner,
         spec_decoder: SpecDecoder | None = None,
-        use_delta_mel: bool = False,
-        use_delta_delta_mel: bool = False,
+        input_maker: AlignerInputMaker | None = None,
+        use_delta_feat: bool = False,
+        use_delta_delta_feat: bool = False,
+        use_optional_skip_sep: bool = False,
+        separator_token_id: int = -1,
     ):
         super().__init__()
 
@@ -277,35 +318,64 @@ class NDAligner(BaseModel):
         self.crf_aligner = crf_aligner
 
         self.spec_decoder = spec_decoder  # Optional Modules
+        self.input_maker = input_maker  # Optional Modules
 
-        self.use_delta_mel = use_delta_mel
-        self.use_delta_delta_mel = use_delta_delta_mel
+        self.use_delta_feat = use_delta_feat
+        self.use_delta_delta_feat = use_delta_delta_feat
+
+        self.use_optional_skip_sep = use_optional_skip_sep
+        self.separator_token_id = separator_token_id
+
+        if self.use_optional_skip_sep and (self.separator_token_id < 0):
+            raise ValueError(
+                f"Set to Use Seperator Skipping Toplogy, "
+                + f"but seperator token-id({self.separator_token_id}) is not initialized,"
+                + f"set use_optional_skip_sep=False or"
+                + f"set proper seperator_token_id at initialization."
+            )
 
     @override
     def forward(
         self,
-        x: torch.Tensor,  # (B, T_text)
-        x_lengths: torch.Tensor,  # (B,)
-        y: torch.Tensor,  # (B, n_mels, T_mel)
-        y_lengths: torch.Tensor,  # (B,)
-        cond: torch.Tensor,  # (B, D_cond)
+        x: torch.Tensor,
+        x_lengths: torch.Tensor,
+        y: torch.Tensor,  # alignment input feature: mel or linspec, (B, C_align, T)
+        y_lengths: torch.Tensor,
+        cond: torch.Tensor,
+        y_recon: torch.Tensor | None = None,  # reconstruction target: mel, (B, n_mels, T)
+        y_recon_lengths: torch.Tensor | None = None,
         compute_viterbi_loss: bool = False,
         compute_diagonal_loss: bool = False,
     ) -> AlignerForward:
         assert self.spec_decoder is not None
 
-        _, n_mels, T_mel = y.shape
+        _, _c_align, T_spec = y.shape
 
-        idx = torch.arange(T_mel, device=y.device).unsqueeze(0)
+        if y_recon is None:
+            y_recon = y
+
+        if y_recon_lengths is None:
+            y_recon_lengths = y_lengths
+
+        if not torch.equal(y_lengths, y_recon_lengths):
+            raise ValueError(
+                "y_lengths and y_recon_lengths must match. "
+                + f"got y_lengths={y_lengths.tolist()}, "
+                + f"y_recon_lengths={y_recon_lengths.tolist()}"
+            )
+
+        _, n_recon_channels, _ = y_recon.shape
+
+        idx = torch.arange(T_spec, device=y.device).unsqueeze(0)
         spec_mask = (idx < y_lengths.unsqueeze(1)).to(dtype=y.dtype)
 
-        # 2. Pairwise CRF alignment
         out = self.compute_alignments(
             x=x,
             x_lengths=x_lengths,
             y=y,
             y_lengths=y_lengths,
             cond=cond,
+            compute_soft_path=True,
             compute_hard_path=compute_viterbi_loss,
         )
 
@@ -317,12 +387,15 @@ class NDAligner(BaseModel):
 
         crf_loss = -out.norm_log_z.mean()
 
+        y_recon = y_recon.to(device=recon.device, dtype=recon.dtype)
+        recon_mask = spec_mask.to(device=recon.device, dtype=recon.dtype).unsqueeze(1)
+
         recon_loss = F.l1_loss(
-            recon * spec_mask.unsqueeze(1),
-            y * spec_mask.unsqueeze(1),
+            recon * recon_mask,
+            y_recon * recon_mask,
             reduction="sum",
         )
-        recon_loss = recon_loss / (spec_mask.sum() * n_mels).clamp_min(1.0)
+        recon_loss = recon_loss / (spec_mask.sum() * n_recon_channels).clamp_min(1.0)
 
         diag_loss = torch.zeros((), device=x.device)
 
@@ -335,22 +408,13 @@ class NDAligner(BaseModel):
             )
 
         viterbi_kl_loss = torch.zeros((), device=x.device)
-        viterbi_ot_loss = torch.zeros((), device=x.device)
 
         if compute_viterbi_loss and out.hard_attn is not None:
             spec_mask_2d = spec_mask.squeeze(1) if spec_mask.dim() == 3 else spec_mask
-            text_mask_bool = sequence_mask(x_lengths, x.size(1))
 
             viterbi_kl_loss = compute_viterbi_kl_loss(
                 log_gamma=out.log_gamma,
                 viterbi_attn=out.hard_attn,
-                spec_mask=spec_mask_2d,
-            )
-
-            viterbi_ot_loss = compute_viterbi_ot_loss(
-                log_gamma=out.log_gamma,
-                viterbi_attn=out.hard_attn,
-                text_mask=text_mask_bool,
                 spec_mask=spec_mask_2d,
             )
 
@@ -376,11 +440,10 @@ class NDAligner(BaseModel):
             crf_loss=crf_loss,
             diag_loss=diag_loss,
             viterbi_kl_loss=viterbi_kl_loss,
-            viterbi_ot_loss=viterbi_ot_loss,
         )
 
     @override
-    @torch.no_grad
+    @torch.no_grad()
     def inference(
         self,
         x: torch.Tensor,  # (B, T_text)
@@ -388,6 +451,7 @@ class NDAligner(BaseModel):
         y: torch.Tensor,  # (B, n_mels, T_mel)
         y_lengths: torch.Tensor,  # (B,)
         cond: torch.Tensor,  # (B, D_cond)
+        compute_soft_path: bool = True,
         compute_hard_path: bool = True,
     ) -> AlignerFeatures:
         assert self.spec_encoder is not None
@@ -399,6 +463,7 @@ class NDAligner(BaseModel):
             y=y,
             y_lengths=y_lengths,
             cond=cond,
+            compute_soft_path=compute_soft_path,
             compute_hard_path=compute_hard_path,
         )
 
@@ -409,11 +474,29 @@ class NDAligner(BaseModel):
         y: torch.Tensor,  # (B, n_mels, T_mel)
         y_lengths: torch.Tensor,  # (B,)
         cond: torch.Tensor,  # (B, D_cond)
+        compute_soft_path: bool = True,
         compute_hard_path: bool = False,
     ) -> AlignerFeatures:
         """
-        Extracts Only Alignment w/o reconstruction using decoder.
+        Extract alignments without reconstruction.
+
+        Modes:
+            compute_soft_path=True, compute_hard_path=False:
+                forward-backward only
+
+            compute_soft_path=True, compute_hard_path=True:
+                forward-backward + Viterbi
+
+            compute_soft_path=False, compute_hard_path=True:
+                Viterbi only
+
+        At least one of compute_soft_path and compute_hard_path must be True.
         """
+
+        if (not compute_soft_path) and (not compute_hard_path):
+            raise RuntimeError(
+                "At least one of compute_soft_path and compute_hard_path must be True."
+            )
 
         assert self.spec_encoder is not None
         assert self.crf_aligner is not None
@@ -423,13 +506,21 @@ class NDAligner(BaseModel):
         text_mask_bool = sequence_mask(x_lengths, x.size(1))
         text_mask = text_mask_bool.unsqueeze(1).to(dtype=y.dtype)
 
+        optional_separator_mask = self._make_optional_separator_mask(
+            x=x,
+            x_lengths=x_lengths,
+        )
+
         idx = torch.arange(T_mel, device=y.device).unsqueeze(0)
         spec_mask = (idx < y_lengths.unsqueeze(1)).to(dtype=y.dtype)
 
-        # 1. Text / speech representations (for alignment only)
+        # ------------------------------------------------------------
+        # 1. Text / speech representations
+        # ------------------------------------------------------------
         h_text = self.text_encoder(
             x=x,
             x_mask=text_mask,
+            cond=cond if getattr(self.text_encoder, "dim_cond", 0) > 0 else None,
         )  # (B, C_text, T_text)
 
         y_feat = self._build_spec_encoder_input(y)
@@ -447,12 +538,6 @@ class NDAligner(BaseModel):
             text_mask = text_mask.unsqueeze(1)
         text_mask = text_mask.to(device=device, dtype=dtype)
 
-        viterbi_path = viterbi_logp = None
-        hard_attn = hard_dur = None
-
-        assert spec_mask is not None
-        assert self.crf_aligner is not None
-
         if spec_mask.dim() == 3:
             spec_mask_2d = spec_mask.squeeze(1)
         else:
@@ -460,7 +545,21 @@ class NDAligner(BaseModel):
 
         spec_mask_2d = spec_mask_2d.to(device=device, dtype=dtype)
 
+        # ------------------------------------------------------------
+        # 2. CRF alignment
+        # ------------------------------------------------------------
         if compute_hard_path:
+            crf_outputs = self.crf_aligner(
+                h_spec=h_spec,
+                spec_mask=spec_mask_2d.unsqueeze(1),
+                h_text=h_text,
+                text_mask=text_mask,
+                cond=cond,
+                optional_separator_mask=optional_separator_mask,
+                return_soft=compute_soft_path,
+                return_hard=True,
+            )
+
             (
                 soft_gamma,
                 log_alpha,
@@ -476,15 +575,20 @@ class NDAligner(BaseModel):
                 hard_dur,
                 viterbi_path,
                 viterbi_logp,
-            ) = self.crf_aligner(
+            ) = crf_outputs
+
+        else:
+            crf_outputs = self.crf_aligner(
                 h_spec=h_spec,
                 spec_mask=spec_mask_2d.unsqueeze(1),
                 h_text=h_text,
                 text_mask=text_mask,
                 cond=cond,
-                return_hard=True,
+                optional_separator_mask=optional_separator_mask,
+                return_soft=True,
+                return_hard=False,
             )
-        else:
+
             (
                 soft_gamma,
                 log_alpha,
@@ -496,14 +600,12 @@ class NDAligner(BaseModel):
                 masked_raw_unary,
                 log_b,
                 soft_dur,
-            ) = self.crf_aligner(
-                h_spec=h_spec,
-                spec_mask=spec_mask_2d.unsqueeze(1),
-                h_text=h_text,
-                text_mask=text_mask,
-                cond=cond,
-                return_hard=False,
-            )
+            ) = crf_outputs
+
+            hard_attn = None
+            hard_dur = None
+            viterbi_path = None
+            viterbi_logp = None
 
         return AlignerFeatures(
             # attention / durations
@@ -520,52 +622,74 @@ class NDAligner(BaseModel):
             log_gamma=log_gamma,
             raw_log_z=raw_log_z,
             norm_log_z=norm_log_z,
-            # unary-potentials
+            # unary potentials
             log_b=log_b,
             raw_unary=raw_unary,
             masked_raw_unary=masked_raw_unary,
-            # viterbi(hard)-aware features
+            # viterbi-aware features
             viterbi_path=viterbi_path,
             viterbi_logp=viterbi_logp,
         )
 
-    @staticmethod
-    def _compute_delta_feature(
-        x: torch.Tensor,
-        width: int = 5,
-    ) -> torch.Tensor:
+    def _make_optional_separator_mask(
+        self,
+        x: torch.Tensor,  # (B, T_text)
+        x_lengths: torch.Tensor,  # (B,)
+    ) -> torch.Tensor | None:
         """
-        Regression-style delta feature along time axis.
+        Build an optional-separator mask for the CRF topology.
+
+        Returns None when optional separator skipping is disabled or when the
+        current batch contains no valid separator tokens. Returning None is
+        intentional: LinearCRFAligner then uses the original strict stay/advance
+        topology and avoids constructing skip-transition tensors.
+
+        A True entry means the corresponding text token may receive zero
+        duration by being skipped through the j-2 -> j transition.
+        """
+        if not self.use_optional_skip_sep:
+            return None
+
+        text_mask = sequence_mask(x_lengths, x.size(1))
+        optional_separator_mask = x.eq(self.separator_token_id) & text_mask
+        optional_separator_mask = optional_separator_mask.clone()
+
+        # The start and terminal states are forced by the CRF topology.
+        # Do not allow them to become optional even if a malformed tokenizer
+        # emits the separator id at an endpoint.
+        if optional_separator_mask.size(1) > 0:
+            batch_idx = torch.arange(
+                optional_separator_mask.size(0),
+                device=optional_separator_mask.device,
+            )
+            last_idx = (x_lengths.to(device=optional_separator_mask.device).long() - 1).clamp_min(0)
+
+            optional_separator_mask[:, 0] = False
+            optional_separator_mask[batch_idx, last_idx] = False
+
+        if not torch.any(optional_separator_mask):
+            return None
+
+        return optional_separator_mask
+
+    @staticmethod
+    def _compute_delta_feature(x: torch.Tensor) -> torch.Tensor:
+        """
+        First-order adjacent-frame difference along the time axis.
 
         Args:
             x: (B, C, T)
-            width: odd integer, usually 5.
-
         Returns:
             delta: (B, C, T)
         """
         if x.dim() != 3:
             raise ValueError(f"x must have shape (B, C, T), got {tuple(x.shape)}")
 
-        if width % 2 == 0 or width < 3:
-            raise ValueError(f"width must be odd and >= 3, got {width}")
-
         if x.size(-1) <= 1:
             return torch.zeros_like(x)
 
-        n = width // 2
-        denom = 2 * sum(i * i for i in range(1, n + 1))
-
-        kernel = torch.arange(-n, n + 1, device=x.device, dtype=x.dtype)
-        kernel = kernel / denom
-        kernel = kernel.view(1, 1, width)
-
-        b, c, t = x.shape
-        x_flat = x.reshape(b * c, 1, t)
-        x_flat = F.pad(x_flat, (n, n), mode="replicate")
-
-        delta = F.conv1d(x_flat, kernel)
-        delta = delta.reshape(b, c, t)
+        delta = torch.zeros_like(x)
+        delta[..., 1:] = x[..., 1:] - x[..., :-1]
 
         return delta
 
@@ -588,17 +712,17 @@ class NDAligner(BaseModel):
         """
         features = [y]
 
-        if self.use_delta_mel:
+        if self.use_delta_feat:
             with torch.no_grad():
-                delta_y = self._compute_delta_feature(y, width=5)
+                delta_y = self._compute_delta_feature(y)
             features.append(delta_y)
 
-        if self.use_delta_delta_mel:
-            if not self.use_delta_mel:
+        if self.use_delta_delta_feat:
+            if not self.use_delta_feat:
                 raise ValueError("use_delta_delta_mel=True requires use_delta_mel=True.")
 
             with torch.no_grad():
-                delta_delta_y = self._compute_delta_feature(delta_y, width=5)
+                delta_delta_y = self._compute_delta_feature(delta_y)
             features.append(delta_delta_y)
 
         if len(features) == 1:
@@ -617,7 +741,6 @@ class NDAlignerLossWeights(NamedTuple):
     diag_loss_weight: float = 0.0
     recon_loss_weight: float = 0.0
     viterbi_kl_loss_weight: float = 0.0
-    viterbi_ot_loss_weight: float = 0.0
 
 
 class NDAlignerTrainingModule(BaseModel):
@@ -637,25 +760,25 @@ class NDAlignerTrainingModule(BaseModel):
         self,
         nd_aligner: NDAligner,
         vocoder: Generator | None = None,
-        speaker_encoder: ECAPASpeakerEncoder | None = None,
     ):
         super().__init__()
 
         self.nd_aligner = nd_aligner
 
         # External Modules
-        self.speaker_encoder = speaker_encoder
         self.vocoder = vocoder
 
     @override
     def forward(
         self,
-        x: torch.Tensor,  # (B, T_text)
-        x_lengths: torch.Tensor,  # (B,)
-        y: torch.Tensor,  # (B, n_mels, T_mel)
-        y_lengths: torch.Tensor,  # (B,)
-        cond: torch.Tensor,  # (B, D_cond)
+        x: torch.Tensor,
+        x_lengths: torch.Tensor,
+        y: torch.Tensor,  # alignment input feature
+        y_lengths: torch.Tensor,
+        cond: torch.Tensor,
         loss_weights: NDAlignerLossWeights,
+        y_recon: torch.Tensor | None = None,  # mel reconstruction target
+        y_recon_lengths: torch.Tensor | None = None,
         compute_viterbi_loss: bool = False,
         compute_diagonal_loss: bool = False,
     ) -> NDAlignerTrainingModuleForward:
@@ -667,6 +790,8 @@ class NDAlignerTrainingModule(BaseModel):
                 y=y,
                 y_lengths=y_lengths,
                 cond=cond,
+                y_recon=y_recon,
+                y_recon_lengths=y_recon_lengths,
                 compute_diagonal_loss=compute_diagonal_loss,
                 compute_viterbi_loss=compute_viterbi_loss,
             ),
@@ -696,8 +821,8 @@ class NDAlignerTrainingModule(BaseModel):
 
     @torch.no_grad()
     def compute_speaker_embeddings(self, waveform: torch.Tensor) -> torch.Tensor:
-        assert self.speaker_encoder is not None, "Speaker encoder is not initialized."
-        return self.speaker_encoder(waveform)
+        assert self.nd_aligner.input_maker is not None, "Speaker encoder is not initialized."
+        return self.nd_aligner.input_maker.speaker_encoder(waveform)
 
     def _compute_total_loss(
         self,

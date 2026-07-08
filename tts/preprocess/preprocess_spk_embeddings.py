@@ -10,7 +10,7 @@ from tqdm import tqdm
 from tts.config.utils.io import load_config
 from tts.models.modules.spk_encoder import ECAPASpeakerEncoder
 
-from .config import PreprocessConfig
+from ..config.preprocess.preprocess_config import PreprocessConfigs
 
 
 def parse_args():
@@ -24,9 +24,9 @@ def main(args: Any):
     # Load global data config
     if args.config:
         print(f"📖 Loading data config from: {args.config}")
-        preprocess_config = load_config(args.config, PreprocessConfig)
+        preprocess_config = load_config(args.config, PreprocessConfigs)
     else:
-        preprocess_config = PreprocessConfig()
+        preprocess_config = PreprocessConfigs()
 
     print(">>> Initializing SpeakerEncoder (ECAPA-TDNN)...")
     device = "cuda" if torch.cuda.is_available() else "cpu"

@@ -16,8 +16,13 @@ from .tts_dataset import TTSDataset
 
 
 class TTSCollate:
-    def __init__(self, spec_pad_value: float):
+    def __init__(
+        self,
+        spec_pad_value: float,
+        recon_spec_pad_value: float,
+    ):
         self.spec_pad_value = spec_pad_value
+        self.recon_spec_pad_value = recon_spec_pad_value
 
     def __call__(
         self,
@@ -25,6 +30,7 @@ class TTSCollate:
     ) -> TTSBatch:
         xs = [item.text for item in batch]
         ys = [item.spec for item in batch]
+        y_recons = [item.recon_spec for item in batch]
         conds = [item.cond for item in batch]
 
         scripts = [item.script for item in batch]
@@ -37,7 +43,19 @@ class TTSCollate:
         y_lengths = torch.tensor(
             [y.size(1) for y in ys],
             dtype=torch.long,
-        )  # y is (n_mels, T_mel)
+        )
+
+        y_recon_lengths = torch.tensor(
+            [y.size(1) for y in y_recons],
+            dtype=torch.long,
+        )
+
+        if not torch.equal(y_lengths, y_recon_lengths):
+            raise RuntimeError(
+                "spec_lengths and recon_spec_lengths must match. "
+                + f"spec_lengths={y_lengths.tolist()}, "
+                + f"recon_spec_lengths={y_recon_lengths.tolist()}"
+            )
 
         x_padded = pad_sequence(
             xs,
@@ -53,6 +71,14 @@ class TTSCollate:
         )  # (B, T_mel_max, n_mels)
         y_padded = y_padded.transpose(1, 2).contiguous()  # (B, n_mels, T_mel_max)
 
+        y_recons_transposed = [y.transpose(0, 1) for y in y_recons]
+        y_recon_padded = pad_sequence(
+            y_recons_transposed,
+            batch_first=True,
+            padding_value=self.recon_spec_pad_value,
+        )
+        y_recon_padded = y_recon_padded.transpose(1, 2).contiguous()
+
         cond_batched = torch.stack(conds, dim=0)
 
         return TTSBatch(
@@ -60,6 +86,8 @@ class TTSCollate:
             text_lengths=x_lengths,
             spec=y_padded,
             spec_lengths=y_lengths,
+            recon_spec=y_recon_padded,
+            recon_spec_lengths=y_recon_lengths,
             cond=cond_batched,
             scripts=scripts,
             wav_paths=wav_paths,
@@ -170,7 +198,10 @@ class TTSDataFactory:
         self.valid_dataset = TTSDataset(self.valid_items, config)
         self.test_dataset = TTSDataset(self.test_items, config)
 
-        self.collate_fn = TTSCollate(self.train_dataset.spec_pad_value)
+        self.collate_fn = TTSCollate(
+            spec_pad_value=self.train_dataset.spec_pad_value,
+            recon_spec_pad_value=self.train_dataset.recon_spec_pad_value,
+        )
 
     def _filter_items_by_duration(
         self,

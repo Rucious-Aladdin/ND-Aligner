@@ -2,9 +2,9 @@ from typing import override
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from ..submodules.conv2d_net import Conv2dNet
-from ..submodules.unet2d import UNet2d
 
 
 class UnaryPotentialPredictor(nn.Module):
@@ -38,26 +38,24 @@ class UnaryPotentialPredictor(nn.Module):
         dim_latent: int,
         dim_cond: int,
         cond_channels: int = 32,
-        base_dim: int = 16,
+        dim_hidden: int = 16,
         groups: int = 8,
         unary_scale_init: float = -2.0,
-        unary_network_type: str = "unet",
+        unary_network_type: str = "conv",
         conv_num_layers: int = 4,
         conv_kernel_size: tuple[int, int] = (3, 3),
-        apply_progress_feature: bool = True,
     ):
         super().__init__()
 
-        if unary_network_type not in ("unet", "conv", "negative-l2"):
+        if unary_network_type not in ("conv", "negative-l2"):
             raise ValueError(
                 "unary_network_type must be one of "
-                + f"'unet', 'conv', 'negative-l2', got {unary_network_type!r}."
+                + f"'conv', 'negative-l2', got {unary_network_type!r}."
             )
 
         self.unary_network_type = unary_network_type
         self.dim_latent = dim_latent
         self.cond_channels = cond_channels
-        self.apply_progress_feature = apply_progress_feature
 
         self.spec_proj = nn.Sequential(
             nn.Linear(dim_spec, dim_latent * 2),
@@ -73,30 +71,22 @@ class UnaryPotentialPredictor(nn.Module):
             nn.Linear(dim_latent * 2, dim_latent),
         )
 
-        if unary_network_type in ("unet", "conv"):
-            self.cond_proj = nn.Linear(dim_cond, cond_channels)
+        if unary_network_type == "conv":
+            if self.cond_channels > 0:
+                self.cond_proj = nn.Linear(dim_cond, self.cond_channels)
+            else:
+                self.cond_proj = None
 
-            in_dim = 2 * dim_latent + cond_channels
-            if apply_progress_feature:
-                in_dim += self.progress_dim
+            in_dim = 2 * dim_latent + self.cond_channels
 
-            if unary_network_type == "unet":
-                self.score_net = UNet2d(
-                    dim_in=in_dim,
-                    base_dim=base_dim,
-                    groups=groups,
-                )
-
-            elif unary_network_type == "conv":
-                self.score_net = Conv2dNet(
-                    dim_in=in_dim,
-                    dim_hidden=base_dim,
-                    dim_out=1,
-                    num_layers=conv_num_layers,
-                    kernel_size=conv_kernel_size,
-                    groups=groups,
-                )
-
+            self.score_net = Conv2dNet(
+                dim_in=in_dim,
+                dim_hidden=dim_hidden,
+                dim_out=1,
+                num_layers=conv_num_layers,
+                kernel_size=conv_kernel_size,
+                groups=groups,
+            )
         else:
             self.cond_proj = None
             self.score_net = None
@@ -106,62 +96,12 @@ class UnaryPotentialPredictor(nn.Module):
             torch.tensor(float(unary_scale_init), dtype=torch.float32)
         )
 
-    @staticmethod
-    def _make_progress_features(
-        spec_lengths: torch.Tensor,
-        text_lengths: torch.Tensor,
-        T_s: int,
-        T_t: int,
-        device: torch.device,
-        dtype: torch.dtype,
-    ) -> torch.Tensor:
-        """
-        Returns:
-            progress: (B, T_s, T_t, 4)
-
-        Channels:
-            t_pos        = t / (spec_lengths[b] - 1)
-            j_pos        = j / (text_lengths[b] - 1)
-            diag         = t_pos - j_pos
-            length_ratio = spec_lengths[b] / text_lengths[b]
-        """
-        B = spec_lengths.size(0)
-
-        t = torch.arange(T_s, device=device, dtype=dtype).view(1, T_s, 1, 1)
-        j = torch.arange(T_t, device=device, dtype=dtype).view(1, 1, T_t, 1)
-
-        spec_len = spec_lengths.to(device=device, dtype=dtype).view(B, 1, 1, 1)
-        text_len = text_lengths.to(device=device, dtype=dtype).view(B, 1, 1, 1)
-
-        t_pos = t / (spec_len - 1.0).clamp_min(1.0)
-        j_pos = j / (text_len - 1.0).clamp_min(1.0)
-
-        diag = t_pos - j_pos
-
-        length_ratio = (spec_len / text_len.clamp_min(1.0)).expand(B, T_s, T_t, 1)
-
-        t_pos = t_pos.expand(B, T_s, T_t, 1)
-        j_pos = j_pos.expand(B, T_s, T_t, 1)
-        diag = diag.expand(B, T_s, T_t, 1)
-
-        return torch.cat(
-            [
-                t_pos,
-                j_pos,
-                diag,
-                length_ratio,
-            ],
-            dim=-1,
-        )
-
     @override
     def forward(
         self,
         h_spec: torch.Tensor,  # (B, C_s, T_s)
         h_text: torch.Tensor,  # (B, C_t, T_t)
         cond: torch.Tensor,  # (B, D_cond)
-        spec_lengths: torch.Tensor,  # (B,)
-        text_lengths: torch.Tensor,  # (B,)
     ) -> torch.Tensor:
         h_spec_t = h_spec.transpose(1, 2).contiguous()  # (B, T_s, C_s)
         h_text_t = h_text.transpose(1, 2).contiguous()  # (B, T_t, C_t)
@@ -178,36 +118,25 @@ class UnaryPotentialPredictor(nn.Module):
             unary_potential = unary_potential * self.evidence_scale.exp()
             return unary_potential
 
-        assert self.cond_proj is not None
         assert self.score_net is not None
 
         spec_pair = h_spec_t.unsqueeze(2).expand(B, T_s, T_t, C)
         text_pair = h_text_t.unsqueeze(1).expand(B, T_s, T_t, C)
 
-        cond_feat = self.cond_proj(cond)
-        cond_pair = cond_feat.view(B, 1, 1, self.cond_channels).expand(
-            B,
-            T_s,
-            T_t,
-            self.cond_channels,
-        )
-
-        pairwise_parts = [
+        pairwise_parts: list[torch.Tensor] = [
             spec_pair,
             text_pair,
-            cond_pair,
         ]
 
-        if self.apply_progress_feature:
-            progress_pair = self._make_progress_features(
-                spec_lengths=spec_lengths,
-                text_lengths=text_lengths,
-                T_s=T_s,
-                T_t=T_t,
-                device=h_spec.device,
-                dtype=h_spec.dtype,
+        if self.cond_proj is not None:
+            cond_feat = self.cond_proj(cond)
+            cond_pair = cond_feat.view(B, 1, 1, self.cond_channels).expand(
+                B,
+                T_s,
+                T_t,
+                self.cond_channels,
             )
-            pairwise_parts.append(progress_pair)
+            pairwise_parts.append(cond_pair)
 
         pairwise = torch.cat(pairwise_parts, dim=-1)
         pairwise = pairwise.permute(0, 3, 1, 2).contiguous()
@@ -219,7 +148,7 @@ class UnaryPotentialPredictor(nn.Module):
         return unary_potential
 
 
-class MonotonicCRFAligner(nn.Module):
+class LinearCRFAligner(nn.Module):
     """
     Unary-only monotonic latent-path CRF aligner.
 
@@ -228,9 +157,11 @@ class MonotonicCRFAligner(nn.Module):
         z_{T-1} = N-1
         z_t -> z_t      stay
         z_t -> z_t + 1  advance
+        z_t -> z_t + 2  optional-separator skip
+                         allowed iff token z_t + 1 is optional
 
     There is no learned transition score.
-    Allowed stay/advance transitions have score 0.
+    Allowed transitions have score 0.
     Disallowed transitions are excluded by the monotonic reachability mask.
 
     Path score:
@@ -246,32 +177,23 @@ class MonotonicCRFAligner(nn.Module):
         dim_cond: int,
         dim_unary_latent: int,
         cond_channels: int = 32,
-        # unary network configs
-        unary_network_type: str = "unet",  # "unet", "conv", "negative-l2"
-        unary_base_dim: int = 16,
-        unary_groups: int = 8,
-        # conv only configs
-        conv_num_layers: int = 4,
-        conv_kernel_size: tuple[int, int] = (3, 3),
         # normalization and support configs
-        unary_support_type: str = "local",  # or "global"
-        unary_radius: int = 10,
+        unary_network_type: str = "conv",  # "conv", "negative-l2"
+        unary_support_type: str = "global",  # "global" "raw", "bernoulli"
         unary_temperature: float = 1.0,
         unary_scale_init: float = -2.0,
-        unary_apply_progress_feature: bool = True,
+        # unary network configs
+        conv_num_layers: int = 4,
+        conv_num_groups: int = 8,
+        conv_dim_hidden: int = 16,
+        conv_kernel_size: tuple[int, int] = (3, 3),
     ):
         super().__init__()
 
         self.dim_spec = dim_spec
         self.dim_text = dim_text
 
-        if unary_support_type not in ("local", "global"):
-            raise ValueError(
-                f"unary_support_type must be either 'local' or 'global', got {unary_support_type!r}."
-            )
-
         self.unary_support_type = unary_support_type
-        self.unary_local_radius = int(unary_radius)
         self.unary_temperature = float(unary_temperature)
 
         self.unary_predictor = UnaryPotentialPredictor(
@@ -280,13 +202,12 @@ class MonotonicCRFAligner(nn.Module):
             dim_latent=dim_unary_latent,
             dim_cond=dim_cond,
             cond_channels=cond_channels,
-            base_dim=unary_base_dim,
-            groups=unary_groups,
+            dim_hidden=conv_dim_hidden,
+            groups=conv_num_groups,
             unary_scale_init=unary_scale_init,
             unary_network_type=unary_network_type,
             conv_num_layers=conv_num_layers,
             conv_kernel_size=conv_kernel_size,
-            apply_progress_feature=unary_apply_progress_feature,
         )
 
     @override
@@ -297,8 +218,13 @@ class MonotonicCRFAligner(nn.Module):
         h_text: torch.Tensor,  # (B, C_t, T_t)
         text_mask: torch.Tensor,  # (B, T_t) or (B, 1, T_t)
         cond: torch.Tensor,  # (B, D_cond)
+        optional_separator_mask: torch.Tensor | None = None,  # (B, T_t) or (B, 1, T_t)
+        return_soft: bool = True,
         return_hard: bool = False,
-    ) -> tuple[torch.Tensor, ...]:
+    ) -> tuple[torch.Tensor | None, ...]:
+        if (not return_soft) and (not return_hard):
+            raise RuntimeError("At least one of return_soft and return_hard must be True.")
+
         if spec_mask.dim() == 3:
             spec_mask = spec_mask.squeeze(1)
         if text_mask.dim() == 3:
@@ -310,11 +236,25 @@ class MonotonicCRFAligner(nn.Module):
         spec_lengths = spec_mask.sum(dim=-1).long()
         text_lengths = text_mask.sum(dim=-1).long()
 
-        if torch.any(spec_lengths < text_lengths):
-            raise ValueError(
-                "Strict-monotone positive-duration alignment requires "
-                + "spec_lengths[b] >= text_lengths[b] for every batch item."
-            )
+        if optional_separator_mask is not None:
+            if optional_separator_mask.dim() == 3:
+                optional_separator_mask = optional_separator_mask.squeeze(1)
+            optional_separator_mask = optional_separator_mask.bool() & text_mask
+
+            min_required_text_lengths = text_lengths - optional_separator_mask.sum(dim=-1).long()
+
+            if torch.any(spec_lengths < min_required_text_lengths):
+                raise ValueError(
+                    "Monotone alignment with optional separators requires "
+                    + "spec_lengths[b] >= number of non-optional text tokens "
+                    + "for every batch item."
+                )
+        else:
+            if torch.any(spec_lengths < text_lengths):
+                raise ValueError(
+                    "Strict-monotone positive-duration alignment requires "
+                    + "spec_lengths[b] >= text_lengths[b] for every batch item."
+                )
 
         spec_mask_f = spec_mask.unsqueeze(1).to(dtype=h_spec.dtype)
         text_mask_f = text_mask.unsqueeze(1).to(dtype=h_text.dtype)
@@ -326,8 +266,6 @@ class MonotonicCRFAligner(nn.Module):
             h_spec=h_spec,
             h_text=h_text,
             cond=cond,
-            spec_lengths=spec_lengths,
-            text_lengths=text_lengths,
         )  # (B, T_s, T_t)
 
         _, T_speech, T_text = raw_unary.shape
@@ -335,13 +273,23 @@ class MonotonicCRFAligner(nn.Module):
 
         length_valid = spec_mask.unsqueeze(2) & text_mask.unsqueeze(1)
 
-        reachable = self._strict_reachability_mask(
-            spec_lengths=spec_lengths,
-            text_lengths=text_lengths,
-            T_speech=T_speech,
-            T_text=T_text,
-            device=device,
-        )
+        if optional_separator_mask is None:
+            reachable = self._strict_reachability_mask(
+                spec_lengths=spec_lengths,
+                text_lengths=text_lengths,
+                T_speech=T_speech,
+                T_text=T_text,
+                device=device,
+            )
+        else:
+            reachable = self._optional_separator_reachability_mask(
+                spec_lengths=spec_lengths,
+                text_lengths=text_lengths,
+                optional_separator_mask=optional_separator_mask,
+                T_speech=T_speech,
+                T_text=T_text,
+                device=device,
+            )
 
         dp_valid = length_valid & reachable
 
@@ -350,25 +298,53 @@ class MonotonicCRFAligner(nn.Module):
             self.neg_large,
         )
 
-        (
-            gamma,
-            log_alpha,
-            log_beta,
-            log_gamma,
-            raw_log_z,
-            log_b,
-        ) = self._forward_backward(
-            raw_unary=raw_unary,
+        # ------------------------------------------------------------
+        # Compute log_b once. Both soft forward-backward and Viterbi use it.
+        # ------------------------------------------------------------
+        log_b = self._compute_log_unary_potential(
+            evidence=raw_unary,
             unary_valid=length_valid,
-            dp_valid=dp_valid,
-            spec_lengths=spec_lengths,
-            text_lengths=text_lengths,
-        )
+        ).contiguous()
 
-        gamma = gamma.masked_fill(~dp_valid, 0.0)
-        durations = gamma.sum(dim=1)
+        # ------------------------------------------------------------
+        # Optional soft path: forward-backward posterior and CRF log Z.
+        # ------------------------------------------------------------
+        if return_soft:
+            (
+                gamma,
+                log_alpha,
+                log_beta,
+                log_gamma,
+                raw_log_z,
+            ) = self._forward_backward(
+                log_b=log_b,
+                dp_valid=dp_valid,
+                spec_lengths=spec_lengths,
+                text_lengths=text_lengths,
+                optional_separator_mask=optional_separator_mask,
+            )
 
-        norm_log_z = raw_log_z / spec_lengths.float()
+            gamma = gamma.masked_fill(~dp_valid, 0.0)
+            durations = gamma.sum(dim=1)
+
+            if self.unary_support_type == "bernoulli":
+                bernoulli_penalty = self.__bernoulli_negative_penalty(
+                    evidence=raw_unary,
+                    penalty_valid=dp_valid,
+                )
+                raw_log_z = raw_log_z - bernoulli_penalty
+
+            norm_log_z = raw_log_z / spec_lengths.float()
+        else:
+            # Hard-only mode. Soft posterior and CRF log-normalizer are intentionally
+            # skipped to avoid the forward-backward DP cost.
+            gamma = None
+            log_alpha = None
+            log_beta = None
+            log_gamma = None
+            raw_log_z = None
+            norm_log_z = None
+            durations = None
 
         base_outputs = (
             gamma,
@@ -391,6 +367,7 @@ class MonotonicCRFAligner(nn.Module):
             dp_valid=dp_valid,
             spec_lengths=spec_lengths,
             text_lengths=text_lengths,
+            optional_separator_mask=optional_separator_mask,
         )
 
         return (
@@ -408,13 +385,12 @@ class MonotonicCRFAligner(nn.Module):
 
     def _forward_backward(
         self,
-        raw_unary: torch.Tensor,
-        unary_valid: torch.Tensor,
+        log_b: torch.Tensor,
         dp_valid: torch.Tensor,
         spec_lengths: torch.Tensor,
         text_lengths: torch.Tensor,
+        optional_separator_mask: torch.Tensor | None,
     ) -> tuple[
-        torch.Tensor,
         torch.Tensor,
         torch.Tensor,
         torch.Tensor,
@@ -422,42 +398,16 @@ class MonotonicCRFAligner(nn.Module):
         torch.Tensor,
     ]:
         """
-        Forward-backward under unary-only monotone CRF score:
+        Forward-backward using precomputed log_b.
 
-            S(z) = sum_t log_b[t, z_t]
-
-        Allowed stay/advance transitions have zero score.
-        Disallowed transitions are excluded by dp_valid/topology.
-
-        Important:
-            unary_valid is used only when computing normalized unary potentials.
-            dp_valid is used only by the dynamic-programming recursions and
-            posterior masking.
-
-        Returns:
-            gamma
-            log_alpha
-            log_beta
-            log_gamma
-            log_z
-            log_b
+        This is used so that hard-only decoding can compute log_b once and skip
+        forward-backward entirely.
         """
-        B, T_speech, T_text = raw_unary.shape
-        device = raw_unary.device
-
-        log_b = self._compute_log_unary_potential(
-            evidence=raw_unary,
-            unary_valid=unary_valid,
-        ).contiguous()
+        B, T_speech, T_text = log_b.shape
+        device = log_b.device
 
         # ------------------------------------------------------------------
-        # Forward:
-        # alpha[t, j] = log score of all partial paths ending at z_t=j.
-        #
-        # alpha[t,j] =
-        #     log_b[t,j]
-        #     +
-        #     logaddexp(alpha[t-1,j], alpha[t-1,j-1])
+        # Forward
         # ------------------------------------------------------------------
         log_alpha_steps: list[torch.Tensor] = []
 
@@ -467,12 +417,17 @@ class MonotonicCRFAligner(nn.Module):
         )
         log_alpha_steps.append(alpha_t)
 
-        for t in range(1, T_speech):  # forward-recursion
-            stay, adv = self.__prev_to_current_scores(
+        for t in range(1, T_speech):
+            stay, adv, skip = self.__prev_to_current_scores(
                 prev_score=alpha_t,
+                optional_separator_mask=optional_separator_mask,
             )
+            if skip is None:
+                prev_sum = torch.logaddexp(stay, adv)
+            else:
+                prev_sum = torch.logaddexp(torch.logaddexp(stay, adv), skip)
 
-            alpha_t = log_b[:, t, :] + torch.logaddexp(stay, adv)
+            alpha_t = log_b[:, t, :] + prev_sum
             alpha_t = alpha_t.masked_fill(~dp_valid[:, t, :], self.neg_large)
 
             log_alpha_steps.append(alpha_t)
@@ -480,13 +435,7 @@ class MonotonicCRFAligner(nn.Module):
         log_alpha = torch.stack(log_alpha_steps, dim=1)
 
         # ------------------------------------------------------------------
-        # Backward:
-        #
-        # beta[t,j] =
-        #     logaddexp(
-        #         log_b[t+1,j]   + beta[t+1,j],
-        #         log_b[t+1,j+1] + beta[t+1,j+1]
-        #     )
+        # Backward
         # ------------------------------------------------------------------
         log_beta_steps: list[torch.Tensor | None] = [None] * T_speech
         beta_next: torch.Tensor | None = None
@@ -494,8 +443,8 @@ class MonotonicCRFAligner(nn.Module):
         j = torch.arange(T_text, device=device).view(1, T_text)
         terminal_state = j == (text_lengths - 1).view(B, 1)
 
-        for t in range(T_speech - 1, -1, -1):  # backward-recursion
-            base = raw_unary.new_full((B, T_text), self.neg_large)
+        for t in range(T_speech - 1, -1, -1):
+            base = log_b.new_full((B, T_text), self.neg_large)
 
             terminal_batches = (spec_lengths - 1) == t
             base = torch.where(
@@ -509,17 +458,17 @@ class MonotonicCRFAligner(nn.Module):
             else:
                 assert beta_next is not None
 
-                stay = log_b[:, t + 1, :] + beta_next
+                next_score = log_b[:, t + 1, :] + beta_next
 
-                adv = torch.cat(
-                    [
-                        log_b[:, t + 1, 1:] + beta_next[:, 1:],
-                        raw_unary.new_full((B, 1), self.neg_large),
-                    ],
-                    dim=1,
+                stay, adv, skip = self.__current_to_next_scores(
+                    next_score=next_score,
+                    optional_separator_mask=optional_separator_mask,
                 )
 
-                recursive = torch.logaddexp(stay, adv)
+                if skip is None:
+                    recursive = torch.logaddexp(stay, adv)
+                else:
+                    recursive = torch.logaddexp(torch.logaddexp(stay, adv), skip)
 
                 beta_t = torch.where(
                     terminal_batches.view(B, 1),
@@ -540,7 +489,6 @@ class MonotonicCRFAligner(nn.Module):
         raw_log_gamma = log_alpha + log_beta - log_z.view(B, 1, 1)
         raw_log_gamma = raw_log_gamma.masked_fill(~dp_valid, self.neg_large)
 
-        # Row-normalize posterior marginals for numerical stability.
         valid_frame = dp_valid.any(dim=-1, keepdim=True)
         row_log_norm = torch.logsumexp(raw_log_gamma, dim=-1, keepdim=True)
 
@@ -559,7 +507,6 @@ class MonotonicCRFAligner(nn.Module):
             log_beta,
             log_gamma,
             log_z,
-            log_b,
         )
 
     def _viterbi_decode(
@@ -568,6 +515,7 @@ class MonotonicCRFAligner(nn.Module):
         dp_valid: torch.Tensor,
         spec_lengths: torch.Tensor,
         text_lengths: torch.Tensor,
+        optional_separator_mask: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
         MAP path decoding under the same unary-only CRF score:
@@ -598,18 +546,37 @@ class MonotonicCRFAligner(nn.Module):
         prev_stay = j_idx
         prev_adv = torch.clamp(j_idx - 1, min=0)
 
-        for t in range(1, T_speech):  # forward-recursion with backpointer
-            stay, adv = self.__prev_to_current_scores(
-                prev_score=delta_t,
-            )
+        if optional_separator_mask is None:
+            candidate_prev = torch.stack([prev_stay, prev_adv], dim=0)
+        else:
+            prev_skip = torch.clamp(j_idx - 2, min=0)
+            candidate_prev = torch.stack([prev_stay, prev_adv, prev_skip], dim=0)
 
-            choose_adv = adv > stay
-            best_prev_score = torch.where(choose_adv, adv, stay)
+        for t in range(1, T_speech):  # forward-recursion with backpointer
+            stay, adv, skip = self.__prev_to_current_scores(
+                prev_score=delta_t,
+                optional_separator_mask=optional_separator_mask,
+            )
+            if skip is None:
+                candidate_scores = torch.stack([stay, adv], dim=0)
+            else:
+                candidate_scores = torch.stack([stay, adv, skip], dim=0)
+
+            best_move = torch.argmax(candidate_scores, dim=0)
+            best_prev_score = torch.gather(
+                candidate_scores,
+                dim=0,
+                index=best_move.unsqueeze(0),
+            ).squeeze(0)
 
             delta_t = log_b[:, t, :] + best_prev_score
             delta_t = delta_t.masked_fill(~dp_valid[:, t, :], self.neg_large)
 
-            backptr[:, t, :] = torch.where(choose_adv, prev_adv, prev_stay)
+            backptr[:, t, :] = torch.gather(
+                candidate_prev,
+                dim=0,
+                index=best_move.unsqueeze(0),
+            ).squeeze(0)
 
             delta_steps.append(delta_t)
 
@@ -665,40 +632,40 @@ class MonotonicCRFAligner(nn.Module):
         unary_valid: torch.Tensor,  # (B, T_s, T_t)
     ) -> torch.Tensor:
         """
-        Compute normalized unary log potential log_b[t, j].
+        Compute unary log potential log_b[t, j].
 
         Supports:
-            local:
-                denominator over a local text window around j
+            raw:
+                unnormalized raw logit score.
+
+            bernoulli:
+                raw logit score used as the path-dependent log-odds term
+                of the full Bernoulli emission objective. The path-independent
+                negative-cell penalty is added outside the DP.
 
             global:
-                denominator over all valid text states at frame t
-
-        Returns:
-            log_b: (B, T_s, T_t)
+                framewise text-axis log-softmax.
         """
-        if self.unary_support_type == "local":
-            return self.__local_support_log_potential(
-                evidence=evidence,
-                unary_valid=unary_valid,
-            )
+        if self.unary_support_type in ("raw", "bernoulli"):
+            temperature = max(float(self.unary_temperature), 1e-6)
+            score = evidence / temperature
+            return score.masked_fill(~unary_valid, self.neg_large)
 
         if self.unary_support_type == "global":
-            return self.__global_support_log_potential(
+            return self.__global_discriminative_log_potential(
                 evidence=evidence,
                 unary_valid=unary_valid,
             )
 
         raise RuntimeError(f"Unexpected unary_support_type: {self.unary_support_type!r}")
 
-    def __global_support_log_potential(
+    def __global_discriminative_log_potential(
         self,
         evidence: torch.Tensor,
         unary_valid: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Global-support unary log potential.
-
+        classification for text-axis
         For each frame t, the denominator is computed over length-valid text states.
         Strict reachability is not applied during unary normalization.
 
@@ -733,68 +700,37 @@ class MonotonicCRFAligner(nn.Module):
 
         return log_phi
 
-    def __local_support_log_potential(
+    def __bernoulli_negative_penalty(
         self,
         evidence: torch.Tensor,
-        unary_valid: torch.Tensor,
+        penalty_valid: torch.Tensor,
     ) -> torch.Tensor:
         """
-        Local-support unary log potential.
+        Path-independent negative-cell penalty for the full Bernoulli emission
+        objective.
 
-        For each pair (t, j), the denominator is computed over length-valid text states
-        inside the local text window around j. Strict reachability is not applied during
-        unary normalization.
+        Computes:
 
-            log_phi[t, j]
-            =
-            e[t, j] / tau
-            -
-            logsumexp_{k in local_window(j), length_valid(t,k)} e[t, k] / tau
+            sum_{(t,j) in D} softplus(s[t,j])
 
-        Padding-invalid states are masked after log_phi is computed.
-        Strict DP reachability is applied later by forward-backward/Viterbi.
+        where s[t,j] = evidence[t,j] / tau.
+
+        This equals:
+
+            - sum_{(t,j) in D} log sigmoid(-s[t,j])
         """
-        if self.unary_local_radius < 0:
-            raise ValueError(
-                f"Radius must be non-negative for local-support log potential, got {self.unary_local_radius}."
-            )
         if self.unary_temperature <= 0:
             raise ValueError(
-                f"Temperature must be positive for local-support log potential, got {self.unary_temperature}."
+                f"Temperature must be positive for Bernoulli penalty, got {self.unary_temperature}."
             )
 
-        _, _, T_t = evidence.shape
-
         temperature = max(float(self.unary_temperature), 1e-6)
-
         score = evidence / temperature
 
-        W = min(2 * int(self.unary_local_radius) + 1, T_t)
+        penalty = F.softplus(score)
+        penalty = penalty.masked_fill(~penalty_valid, 0.0)
 
-        j_idx = torch.arange(T_t, device=evidence.device)
-        start_idx = torch.clamp(
-            j_idx - int(self.unary_local_radius),
-            min=0,
-            max=T_t - W,
-        )
-
-        score_windows = score.unfold(dimension=-1, size=W, step=1).contiguous()
-        valid_windows = unary_valid.unfold(dimension=-1, size=W, step=1).contiguous()
-
-        selected_score_windows = score_windows[:, :, start_idx, :]
-        selected_valid_windows = valid_windows[:, :, start_idx, :]
-
-        selected_score_windows = selected_score_windows.masked_fill(
-            ~selected_valid_windows,
-            self.neg_large,
-        )
-
-        log_denom = torch.logsumexp(selected_score_windows, dim=-1)
-
-        log_phi = score - log_denom
-        log_phi = log_phi.masked_fill(~unary_valid, self.neg_large)
-
-        return log_phi
+        return penalty.sum(dim=(1, 2))  # (B,)
 
     def __initial_dp_score(
         self,
@@ -817,16 +753,19 @@ class MonotonicCRFAligner(nn.Module):
     def __prev_to_current_scores(
         self,
         prev_score: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor]:
+        optional_separator_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
         """
-        Common stay/advance candidate scores from previous frame to current frame.
+        Candidate scores from previous frame/state to current frame/state.
 
-        Since transition scores are removed:
+        For current state j:
+            stay = prev_score[j]
+            adv  = prev_score[j - 1]
 
-            stay    = prev_score[j]
-            advance = prev_score[j-1]
+        This is the original strict monotone stay/advance topology.
         """
-        B = prev_score.size(0)
+        B, T_text = prev_score.shape
+        device = prev_score.device
 
         stay = prev_score
 
@@ -838,7 +777,85 @@ class MonotonicCRFAligner(nn.Module):
             dim=1,
         )
 
-        return stay, adv
+        if optional_separator_mask is None:
+            return stay, adv, None
+
+        skip = torch.cat(
+            [
+                prev_score.new_full((B, 2), self.neg_large),
+                prev_score[:, :-2],
+            ],
+            dim=1,
+        )
+
+        skip_allowed = torch.zeros(
+            (B, T_text),
+            dtype=torch.bool,
+            device=device,
+        )
+
+        if T_text > 2:
+            # For current j, skip is allowed iff token j - 1 is optional.
+            skip_allowed[:, 2:] = optional_separator_mask[:, 1:-1]
+
+        skip = skip.masked_fill(~skip_allowed, self.neg_large)
+
+        return stay, adv, skip
+
+    def __current_to_next_scores(
+        self,
+        next_score: torch.Tensor,
+        optional_separator_mask: torch.Tensor | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor | None]:
+        """
+        Candidate scores from current frame/state to next frame/state.
+
+        For current state j:
+            stay = next_score[j]
+            adv  = next_score[j + 1]
+
+        Here:
+            next_score[:, k] = log_b[t + 1, k] + beta[t + 1, k]
+
+        This is the original strict monotone stay/advance topology.
+        """
+        B, T_text = next_score.shape
+        device = next_score.device
+
+        stay = next_score
+
+        adv = torch.cat(
+            [
+                next_score[:, 1:],
+                next_score.new_full((B, 1), self.neg_large),
+            ],
+            dim=1,
+        )
+
+        if optional_separator_mask is None:
+            return stay, adv, None
+
+        skip = torch.cat(
+            [
+                next_score[:, 2:],
+                next_score.new_full((B, 2), self.neg_large),
+            ],
+            dim=1,
+        )
+
+        skip_allowed = torch.zeros(
+            (B, T_text),
+            dtype=torch.bool,
+            device=device,
+        )
+
+        if T_text > 2:
+            # For current j, skip is allowed iff token j + 1 is optional.
+            skip_allowed[:, :-2] = optional_separator_mask[:, 1:-1]
+
+        skip = skip.masked_fill(~skip_allowed, self.neg_large)
+
+        return stay, adv, skip
 
     @property
     def neg_large(self) -> float:
@@ -859,7 +876,7 @@ class MonotonicCRFAligner(nn.Module):
 
         A state j at frame t is valid if:
           1. j can be reached from state 0 by time t.
-          2. final state N-1 can still be reached by final frame T-1.
+          2. final state N - 1 can still be reached by final frame T - 1.
 
         Zero-indexed:
             z_0 = 0
@@ -878,3 +895,101 @@ class MonotonicCRFAligner(nn.Module):
         within_lengths = (t < T) & (j < N)
 
         return reachable_from_start & completable_to_end & within_lengths
+
+    @staticmethod
+    def _optional_separator_reachability_mask(
+        spec_lengths: torch.Tensor,  # (B,)
+        text_lengths: torch.Tensor,  # (B,)
+        optional_separator_mask: torch.Tensor,  # (B, T_text)
+        T_speech: int,
+        T_text: int,
+        device: torch.device,
+    ) -> torch.Tensor:
+        """
+        Reachability mask for monotone paths with optional separator skip.
+
+        Allowed transitions:
+            j -> j      stay
+            j -> j + 1  advance
+            j -> j + 2  skip, iff token j + 1 is optional separator
+
+        Equivalently, for arrival state j:
+            j - 2 -> j  skip, iff token j - 1 is optional separator
+
+        This function is only called when optional_separator_mask is not None.
+        If the provided mask is all False, it reduces to strict monotone reachability,
+        but the None path avoids constructing optional-skip tensors entirely.
+        """
+        B = spec_lengths.size(0)
+        inf = torch.iinfo(torch.long).max // 4
+
+        min_prefix = torch.full(
+            (B, T_text),
+            fill_value=inf,
+            dtype=torch.long,
+            device=device,
+        )
+        min_prefix[:, 0] = 1
+
+        for j in range(1, T_text):
+            # Normal advance: j - 1 -> j.
+            best = min_prefix[:, j - 1] + 1
+
+            # Optional skip: j - 2 -> j, iff token j - 1 is optional.
+            if j >= 2:
+                skip_allowed = optional_separator_mask[:, j - 1]
+                skip_cost = min_prefix[:, j - 2] + 1
+                best = torch.where(
+                    skip_allowed,
+                    torch.minimum(best, skip_cost),
+                    best,
+                )
+
+            min_prefix[:, j] = best
+
+        min_suffix = torch.full(
+            (B, T_text),
+            fill_value=inf,
+            dtype=torch.long,
+            device=device,
+        )
+
+        batch_idx = torch.arange(B, device=device)
+        final_j = text_lengths - 1
+        min_suffix[batch_idx, final_j] = 1
+
+        for j in range(T_text - 2, -1, -1):
+            # Do not overwrite each sample's terminal state or padded states.
+            update_mask = j < final_j
+
+            # Normal advance: j -> j + 1.
+            best = min_suffix[:, j + 1] + 1
+
+            # Optional skip: j -> j + 2, iff token j + 1 is optional.
+            if j + 2 < T_text:
+                skip_allowed = optional_separator_mask[:, j + 1]
+                skip_cost = min_suffix[:, j + 2] + 1
+                best = torch.where(
+                    skip_allowed,
+                    torch.minimum(best, skip_cost),
+                    best,
+                )
+
+            min_suffix[:, j] = torch.where(
+                update_mask,
+                best,
+                min_suffix[:, j],
+            )
+
+        t = torch.arange(T_speech, device=device).view(1, T_speech, 1)
+        j = torch.arange(T_text, device=device).view(1, 1, T_text)
+
+        T = spec_lengths.view(B, 1, 1)
+        N = text_lengths.view(B, 1, 1)
+
+        within_lengths = (t < T) & (j < N)
+
+        reachable_from_start = (min_prefix.view(B, 1, T_text) - 1) <= t
+        completable_to_end = (min_suffix.view(B, 1, T_text) - 1) <= (T - 1 - t)
+
+        return within_lengths & reachable_from_start & completable_to_end

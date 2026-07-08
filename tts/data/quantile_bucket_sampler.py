@@ -1,9 +1,8 @@
 import random
 from collections.abc import Iterator
-
-import torch
-from torch.utils.data import Sampler
 from typing import override
+
+from torch.utils.data import Sampler
 
 
 class QuantileDurationBatchSampler(Sampler[list[int]]):

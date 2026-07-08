@@ -1,0 +1,4 @@
+1. 전처리 방식이 RMS-normalize에서 peak normalize로 변경됨. peak값은 0.6
+2. diagonal prior loss를 늦게끄는것이 성능향상에 도움이 된다는 것을 알아냄. 30k step에서 0이되는 schedule을 쓸예정
+3. 또한 diagonal이 늦게 꺼지는 것을 감안해 60k step정도 까지 학습을 돌려야 할듯. 시간이 좀더 걸리더라도 유의미한 결과를..
+4. weight-decay 값을 0.01로 설정..

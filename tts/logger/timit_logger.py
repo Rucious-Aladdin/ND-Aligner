@@ -65,16 +65,16 @@ class NDAlignerTimitLogger:
         epoch: int,
         step: int,
         aligner: NDAligner,
-        speaker_encoder: ECAPASpeakerEncoder | None = None,
         vocoder: Generator | None = None,
+        is_test: bool = False,
     ) -> EvalCSVRowInstance:
-        metrics = self.timit_benchmarker(
+        metrics = self.timit_benchmarker.__call__(
             aligner=aligner,
-            speaker_encoder=speaker_encoder,
             vocoder=vocoder,
             max_test_samples=self.max_test_samples,
             save_align_figure=self.save_align_figure,
             align_figure_dir=self.align_figure_dir,
+            is_test=is_test,
         )
 
         row: EvalCSVRowInstance = {

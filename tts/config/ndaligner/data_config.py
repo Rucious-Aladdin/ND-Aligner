@@ -5,9 +5,17 @@ import os.path
 from dataclasses import dataclass, field
 
 SAMPLE_RATE = 22050
+INPUT_FEATURE_TYPE = "mel"
+# INPUT_FEATURE_TYPE: str = "linspec"
+
 DATA_PARENT_DIR = "/shared/data_zfs/blue2959"
+TOKENIZER_TYPE: str = "espeak"
+# TOKENIZER_TYPE: str = "arpa"
+FASTSPEECH2_TOKENIZER_LEXION_PATH = "./tts/baseline/FastSpeech2/lexicon/vctk-lexicon.txt"
 
 N_MELS = 80
+HOP_LENGTH = 128
+N_FFT = 1024
 
 DATASETS = ["vctk"]
 SEED = 42
@@ -15,23 +23,33 @@ SEED = 42
 
 def cache_dir_name() -> str:
     dataset_tag = "+".join(DATASETS)
-    feature_tag = f"mel{N_MELS}"
 
-    return f"cache-{dataset_tag}-{feature_tag}"
+    if INPUT_FEATURE_TYPE == "mel":
+        feature_tag = f"mel{N_MELS}_hop{HOP_LENGTH}"
+    elif INPUT_FEATURE_TYPE == "linspec":
+        n_freq = N_FFT // 2 + 1
+        feature_tag = f"linspec{n_freq}"
+    else:
+        raise ValueError()
+
+    tokenizer_tag = f"{TOKENIZER_TYPE}"
+
+    return f"cache-{dataset_tag}-feature_{feature_tag}-tokenizer_{tokenizer_tag}"
 
 
 @dataclass(frozen=True)
-class AudioConfig:
+class AudioConfigs:
     sr: int = SAMPLE_RATE
+    feature_type: str = INPUT_FEATURE_TYPE
 
     # >> mel-spectrogram configs
-    n_fft: int = 1024
-    hop_length: int = 256
+    n_fft: int = N_FFT
+    hop_length: int = HOP_LENGTH
     win_length: int = 1024
     n_mels: int = N_MELS
     f_min: float = 0.0
     f_max: float = 8000.0
-    num_freq: int = 1025
+    num_freq: int = field(default_factory=lambda: N_FFT // 2 + 1)
 
 
 @dataclass(frozen=True)
@@ -43,7 +61,7 @@ class DatasetConfigs:
     ljspeech_root: str = os.path.join(DATA_PARENT_DIR, "LJSpeech-1.1-preprocessed")
     ljspeech_num_test_samples: int = 30
 
-    vctk_root: str = os.path.join(DATA_PARENT_DIR, "VCTK-preprocessed")
+    vctk_root: str = os.path.join(DATA_PARENT_DIR, "VCTK-preprocessed-trimmed")
     vctk_test_speakers: list[str] = field(
         default_factory=lambda: ["p225", "p226", "p227", "p228", "p229", "p232"]
     )
@@ -58,8 +76,11 @@ class DatasetConfigs:
     val_ratio: float = 0.01
     num_buckets: int = 10
 
-    min_duration_sec: float = 1.5
-    max_duration_sec: float = 25.0
+    min_duration_sec: float = 1.0
+    max_duration_sec: float = 20.0
+
+    tokenizer_type: str = TOKENIZER_TYPE
+    fastspeech2_lexicon_path: str = FASTSPEECH2_TOKENIZER_LEXION_PATH
 
 
 @dataclass(frozen=True)
@@ -67,20 +88,20 @@ class ExperimentConfigs:
     train_time_eval_logging: bool = True
 
     base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments"
-    exp_name: str = "vctk_base+delta_mel+recon_weight_1.0"
-    exp_variant: str = "vctk_base+delta_mel+lower_recon_weight"
+    exp_name: str = "vctk+full"
+    exp_variant: str = "vctk+full"
 
     timit_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TRAIN"
     timit_test_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TEST"
     timit_sr: int = 16_000
-    timit_max_num_test_samples: int = 200
+    timit_max_num_test_samples: int = 250
 
 
 @dataclass(frozen=True)
 class TrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    run_name: str = "nd_aligner_vctk"
+    run_name: str = "nd_aligner_vctk_5ms"
 
     continue_path: str = ""
     continue_dir: str = ""
@@ -90,7 +111,7 @@ class TrainConfigs:
     # --- Intervals (Steps or Epochs) ---
     val_sanity_check: bool = True
     val_sanity_check_full_epoch: bool = True
-    val_interval: int = 1
+    val_interval: int = 1  # epoch-based validataion
     val_interval_step: int = 500
     val_interval_step_skip_hook: bool = False
 
@@ -99,7 +120,7 @@ class TrainConfigs:
     save_interval: int = 1000
 
     # --- Training Loop Limits ---
-    max_epochs: int = 20
+    max_epochs: int = 50
     max_steps: int = 300000  # deprecated
 
     # --- Hardware & Dataloader ---
@@ -113,11 +134,11 @@ class TrainConfigs:
 
     # --- Optimizer & Scheduler ---
     lr: float = 1e-4
-    lr_decay_rate: float = 0.99999768
+    lr_decay_rate: float = 1.0
     betas: list[float] = field(default_factory=lambda: [0.8, 0.99])
     eps: float = 1e-9
-    weight_decay: float = 1e-6
-    grad_clip_thresh: float = 5.0
+    weight_decay: float = 1e-1
+    grad_clip_thresh: float = 2.0
 
     # --- Experiment Tracking ---
     use_tensorboard: bool = True
@@ -135,8 +156,8 @@ class TrainConfigs:
 @dataclass(frozen=True)
 class LossConfigs:
     # Spec Decoder Loss Scheduling
-    recon_init_weight: float = 5.0
-    recon_final_weight: float = 5.0
+    recon_init_weight: float = 10.0
+    recon_final_weight: float = 10.0
     recon_start_step: int = 0
     recon_end_step: int = 100000
 
@@ -147,10 +168,10 @@ class LossConfigs:
     crf_end_step: int = 10000
 
     # Alignment Diagonal Loss Scheduling
-    diag_init_weight: float = 5.0
+    diag_init_weight: float = 10.0
     diag_final_weight: float = 0.0
-    diag_start_step: int = 1000
-    diag_end_step: int = 1010
+    diag_start_step: int = 0
+    diag_end_step: int = 15000
 
     # Alignment Viterbi KL Loss Scheduling
     viterbi_kl_init_weight: float = 0.0
@@ -158,16 +179,10 @@ class LossConfigs:
     viterbi_kl_start_step: int = 50000
     viterbi_kl_end_step: int = 100000
 
-    # Alignment Viterbi OT Loss Scheduling
-    viterbi_ot_init_weight: float = 0.0
-    viterbi_ot_final_weight: float = 0.0
-    viterbi_ot_start_step: int = 150000
-    viterbi_ot_end_step: int = 200000
-
 
 @dataclass(frozen=True)
 class DataConfig:
-    audio: AudioConfig = field(default_factory=AudioConfig)
+    audio: AudioConfigs = field(default_factory=AudioConfigs)
     dataset: DatasetConfigs = field(default_factory=DatasetConfigs)
     train: TrainConfigs = field(default_factory=TrainConfigs)
     extra_exp: ExperimentConfigs = field(default_factory=ExperimentConfigs)

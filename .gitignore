@@ -6,6 +6,7 @@ checkpoints/
 debug_outputs/
 eval/
 exp_configs/**/*.json
+output/
 
 # Python cache
 __pycache__/
