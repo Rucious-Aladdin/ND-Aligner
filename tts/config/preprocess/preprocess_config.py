@@ -10,8 +10,10 @@ from tts.global_constant import DATA_PARENT_DIR, SAMPLE_RATE
 
 @dataclass(frozen=True)
 class PreprocessConfigs:
-    data_root_dir: str = os.path.join(DATA_PARENT_DIR, "VCTK")
-    preprocessed_dir: str = os.path.join(DATA_PARENT_DIR, "VCTK-preprocessed-trimmed")
+    data_root_dir: str = os.path.join(DATA_PARENT_DIR, "LibriTTS", "train-clean-100")
+    preprocessed_dir: str = os.path.join(
+        DATA_PARENT_DIR, "LibriTTS-train-clean-100-preprocessed-trimmed"
+    )
     spk_embedding_dim: int = 192  # ECAPA-TDNN output dimension
 
     resample_sr: int = SAMPLE_RATE

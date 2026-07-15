@@ -1,17 +1,22 @@
 from __future__ import annotations
 
+from contextlib import suppress
 from pathlib import Path
 from typing import NamedTuple, override
 
 import librosa
+import noisereduce as nr
 import torch
 import torch.nn as nn
+from silero_vad import get_speech_timestamps, load_silero_vad
 
 from tts.audio.linear_spectrogram import LinearSpecExtractor
 from tts.audio.mel_spectrogram import MelSpecExtractor
+from tts.audio.utils.suppress_impulsive_peaks import suppress_impulsive_peaks
 from tts.config.ndaligner.data_config import AudioConfigs
 from tts.config.preprocess.preprocess_config import PreprocessConfigs
 from tts.models.modules.spk_encoder import ECAPASpeakerEncoder
+from tts.models.utils.word_mapper import WordsMapper
 from tts.tokenizer.load_tokenizer import load_tokenizer
 
 
@@ -40,6 +45,8 @@ class AlignerInputWithAudio(NamedTuple):
     cond: torch.Tensor | None
     wav_16k: torch.Tensor
     wav_16k_lengths: torch.Tensor
+    wav_16k_start_offset: torch.Tensor
+    wav_16k_end_offset: torch.Tensor
     texts: list[str]
 
     def as_aligner_input(self) -> AlignerInput:
@@ -78,6 +85,10 @@ class AlignerInputMaker(nn.Module):
         preprocess_config: PreprocessConfigs,
         tokenizer_type: str,
         fastspeech2_lexicon_path: str = "",
+        zero_nonspeech_region: bool = False,
+        trim_nonspeech_region: bool = True,
+        suppress_impulsive_peak: bool = True,
+        reduce_noise: bool = True,
         device: str | torch.device = "cpu",
     ):
         super().__init__()
@@ -123,8 +134,21 @@ class AlignerInputMaker(nn.Module):
         else:
             raise ValueError(f"Unsupported feature_type: {audio_config.feature_type!r}")
 
+        self.zero_nonspeech_region = bool(zero_nonspeech_region)
+        self.trim_nonspeech_region = bool(trim_nonspeech_region)
+        self.suppress_impulsive_peaks = bool(suppress_impulsive_peak)
+        self.reduce_noise = bool(reduce_noise)
+
+        use_silero_vad = self.zero_nonspeech_region or self.trim_nonspeech_region
+        self.silero_model = load_silero_vad() if use_silero_vad else None
+
         self.speaker_encoder = ECAPASpeakerEncoder(device=str(self.device))
         self.speaker_encoder.eval()
+
+        self.word_mapper = WordsMapper(
+            tokenizer=self.tokenizer,
+            hyp_ignore_symbols=self.tokenizer.ignore_symbols,
+        )
 
     @torch.no_grad()
     @override
@@ -162,12 +186,21 @@ class AlignerInputMaker(nn.Module):
 
         wav_16k_list: list[torch.Tensor] = []
         wav_model_list: list[torch.Tensor] = []
+        wav_16k_start_offset_list: list[int] = []
+        wav_16k_end_offset_list: list[int] = []
 
         for wav_path in wav_path_list:
-            wav_16k_cpu, wav_model_cpu = self._load_waveforms(wav_path)
+            (
+                wav_16k_cpu,
+                wav_model_cpu,
+                wav_16k_start_offset,
+                wav_16k_end_offset,
+            ) = self._load_waveforms(wav_path)
 
             wav_16k_list.append(wav_16k_cpu.squeeze(0))
             wav_model_list.append(wav_model_cpu.squeeze(0))
+            wav_16k_start_offset_list.append(wav_16k_start_offset)
+            wav_16k_end_offset_list.append(wav_16k_end_offset)
 
         wav_model, wav_model_lengths = self._pad_waveforms(
             wav_model_list,
@@ -179,7 +212,7 @@ class AlignerInputMaker(nn.Module):
         )
 
         y = self.spec_extractor(wav_model)
-        y_lengths = self._compute_spec_lengths(wav_model_lengths)
+        y_lengths = self.compute_spec_lengths(wav_model_lengths)
 
         self._validate_spec_lengths(
             y=y,
@@ -193,6 +226,16 @@ class AlignerInputMaker(nn.Module):
             batch_size=len(wav_path_list),
         )
 
+        wav_16k_start_offset = torch.tensor(
+            wav_16k_start_offset_list,
+            dtype=torch.long,
+            device=self.device,
+        )
+        wav_16k_end_offset = torch.tensor(
+            wav_16k_end_offset_list,
+            dtype=torch.long,
+            device=self.device,
+        )
         return AlignerInputWithAudio(
             x=x,
             x_lengths=x_lengths,
@@ -201,24 +244,65 @@ class AlignerInputMaker(nn.Module):
             cond=cond,
             wav_16k=wav_16k,
             wav_16k_lengths=wav_16k_lengths,
+            wav_16k_start_offset=wav_16k_start_offset,
+            wav_16k_end_offset=wav_16k_end_offset,
             texts=texts,
         )
 
-    def _load_waveforms(self, wav_path: Path) -> tuple[torch.Tensor, torch.Tensor]:
+    def _load_waveforms(
+        self,
+        wav_path: Path,
+    ) -> tuple[torch.Tensor, torch.Tensor, int, int]:
         """
         Load waveform at 16 kHz and model sampling rate.
 
-        If peak normalization is enabled, the gain is computed from the 16-kHz
-        waveform and applied to both waveforms. This keeps speaker embedding,
-        reference waveform, and model feature extraction amplitude-consistent.
+        When trim_nonspeech_region is enabled, both the 16-kHz waveform
+        and model-rate waveform are cropped from the beginning of the
+        first detected speech region to the end of the last detected
+        speech region.
+
+        Offsets are represented in the original 16-kHz sample coordinate:
+
+            start_offset: inclusive
+            end_offset:   inclusive
+
+        If trimming is disabled or speech is not detected:
+
+            start_offset = 0
+            end_offset = original_16k_length - 1
         """
-        wav_16k_np, _ = librosa.load(str(wav_path), sr=16000, mono=True)
+        wav_16k_np, _ = librosa.load(
+            str(wav_path),
+            sr=16_000,
+            mono=True,
+        )
+        if self.reduce_noise:
+            wav_16k_np = nr.reduce_noise(
+                y=wav_16k_np,
+                sr=16_000,
+                stationary=False,
+                prop_decrease=0.8,
+                n_fft=512,
+            )
+
         wav_16k_cpu = torch.from_numpy(wav_16k_np).float().unsqueeze(0)
+
+        if self.suppress_impulsive_peaks:
+            wav_16k_cpu = suppress_impulsive_peaks(wav_16k_cpu)
+
+        original_16k_length = int(wav_16k_cpu.size(-1))
+
+        if original_16k_length == 0:
+            raise RuntimeError(f"Loaded an empty waveform: {wav_path}")
 
         if self.model_sr == 16000:
             wav_model_cpu = wav_16k_cpu.clone()
         else:
-            wav_model_np, _ = librosa.load(str(wav_path), sr=self.model_sr, mono=True)
+            wav_model_np, _ = librosa.load(
+                str(wav_path),
+                sr=self.model_sr,
+                mono=True,
+            )
             wav_model_cpu = torch.from_numpy(wav_model_np).float().unsqueeze(0)
 
         if self.peak_normalize:
@@ -228,7 +312,98 @@ class AlignerInputMaker(nn.Module):
                 peak_target=self.peak_target,
             )
 
-        return wav_16k_cpu, wav_model_cpu
+        # Default: the returned waveform covers the entire original waveform.
+        wav_16k_start_offset = 0
+        wav_16k_end_offset = original_16k_length - 1
+
+        use_vad = self.zero_nonspeech_region or self.trim_nonspeech_region
+
+        if use_vad:
+            vad_tensor = next(
+                self.silero_model.parameters(),  # type: ignore
+                None,
+            )
+
+            if vad_tensor is None:
+                vad_tensor = next(
+                    self.silero_model.buffers(),  # type: ignore
+                    None,
+                )
+
+            vad_device = vad_tensor.device if vad_tensor is not None else torch.device("cpu")
+
+            speech_regions = get_speech_timestamps(
+                wav_16k_cpu.squeeze(0).to(vad_device),
+                self.silero_model,
+                sampling_rate=16_000,
+                threshold=0.3,
+                neg_threshold=None,  # type: ignore
+                min_speech_duration_ms=10,
+                min_silence_duration_ms=10,
+                speech_pad_ms=30,
+                return_seconds=False,
+                window_size_samples=128,
+            )
+
+            if speech_regions:
+                speech_start = int(speech_regions[0]["start"])
+                speech_end_exclusive = int(speech_regions[-1]["end"])
+
+                speech_start = max(
+                    0,
+                    min(speech_start, original_16k_length - 1),
+                )
+                speech_end_exclusive = max(
+                    speech_start + 1,
+                    min(speech_end_exclusive, original_16k_length),
+                )
+
+                if self.zero_nonspeech_region:
+                    wav_16k_cpu = wav_16k_cpu.clone()
+                    wav_16k_cpu[:, :speech_start] = 0.0
+                    wav_16k_cpu[:, speech_end_exclusive:] = 0.0
+
+                if self.trim_nonspeech_region:
+                    wav_16k_start_offset = speech_start
+                    wav_16k_end_offset = speech_end_exclusive - 1
+
+                    wav_16k_cpu = wav_16k_cpu[
+                        :,
+                        speech_start:speech_end_exclusive,
+                    ]
+
+                    if self.model_sr == 16000:
+                        model_start = speech_start
+                        model_end_exclusive = speech_end_exclusive
+                    else:
+                        model_start = (speech_start * self.model_sr) // 16000
+
+                        model_end_exclusive = (
+                            speech_end_exclusive * self.model_sr + 16000 - 1
+                        ) // 16000
+
+                        model_length = int(wav_model_cpu.size(-1))
+
+                        model_start = max(
+                            0,
+                            min(model_start, model_length - 1),
+                        )
+                        model_end_exclusive = max(
+                            model_start + 1,
+                            min(model_end_exclusive, model_length),
+                        )
+
+                    wav_model_cpu = wav_model_cpu[
+                        :,
+                        model_start:model_end_exclusive,
+                    ]
+
+        return (
+            wav_16k_cpu,
+            wav_model_cpu,
+            wav_16k_start_offset,
+            wav_16k_end_offset,
+        )
 
     def _make_condition(
         self,
@@ -239,7 +414,7 @@ class AlignerInputMaker(nn.Module):
         emb = self.speaker_encoder(wav_16k)
         return emb.view(batch_size, -1).to(device=self.device, dtype=y_dtype)
 
-    def _compute_spec_lengths(self, wav_lengths: torch.Tensor) -> torch.Tensor:
+    def compute_spec_lengths(self, wav_lengths: torch.Tensor) -> torch.Tensor:
         n_fft = int(self.audio_config.n_fft)
         hop = int(self.audio_config.hop_length)
         pad = int((n_fft - hop) / 2)

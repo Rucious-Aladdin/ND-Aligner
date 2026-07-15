@@ -1390,6 +1390,18 @@ wheels = [
 ]
 
 [[package]]
+name = "praatio"
+version = "6.2.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/de/fa/be0bab2b2da04427204f84cd5e54bd3364937456adf03d98f0f2cfb8f402/praatio-6.2.2.tar.gz", hash = "sha256:ed8fdee6121bdae142817879ed9a50cc8334e72c03c110162e21ed8160180d2a", size = 2176936, upload-time = "2026-01-16T09:21:52.888Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/76/12/59f3928dc6583d652798758b513ab6062e4dddbbf624623d0ec02e7bbb23/praatio-6.2.2-py3-none-any.whl", hash = "sha256:d097b0e6991715559d68537c6af1baba86a0e0f9ad077e6d078e3d21c510743f", size = 82261, upload-time = "2026-01-16T09:21:50.124Z" },
+]
+
+[[package]]
 name = "prompt-toolkit"
 version = "3.0.52"
 source = { registry = "https://pypi.org/simple" }
@@ -2198,6 +2210,7 @@ dependencies = [
     { name = "onnxscript" },
     { name = "pandas" },
     { name = "phonemizer" },
+    { name = "praatio" },
     { name = "pysptk" },
     { name = "pytest" },
     { name = "pyworld" },
@@ -2234,6 +2247,7 @@ requires-dist = [
     { name = "onnxscript", specifier = ">=0.6.2" },
     { name = "pandas", specifier = ">=3.0.1" },
     { name = "phonemizer", specifier = ">=3.3.0" },
+    { name = "praatio", specifier = ">=6.2.2" },
     { name = "pysptk", specifier = ">=1.0.1" },
     { name = "pytest", specifier = ">=9.0.2" },
     { name = "pyworld", specifier = ">=0.3.5" },

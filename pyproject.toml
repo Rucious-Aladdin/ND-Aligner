@@ -25,6 +25,7 @@ dependencies = [
   "onnxscript>=0.6.2",
   "pandas>=3.0.1",
   "phonemizer>=3.3.0",
+  "praatio>=6.2.2",
   "pysptk>=1.0.1",
   "pytest>=9.0.2",
   "pyworld>=0.3.5",

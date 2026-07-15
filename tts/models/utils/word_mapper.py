@@ -24,7 +24,7 @@ class WordUnit(NamedTuple):
     span: slice
 
 
-class TimitWordSegment(NamedTuple):
+class WordSegment(NamedTuple):
     start_sample: int
     end_sample: int
     word: str
@@ -222,7 +222,7 @@ class WordsMapper:
                     if stop == start:
                         ref_key = ""
                         dist = len(hyp_key)
-                        cost = dp[k][start] + dist + 2.0  # 0개 맵핑은 페널티를 주어 남발 방지
+                        cost = dp[k][start] + dist + 2.0
                     else:
                         ref_key = span_to_key(start, stop)
                         if ref_key is None:
@@ -316,8 +316,8 @@ if __name__ == "__main__":
     from tts.tokenizer.arpa_tokenizer import ARPATokenizer
     from tts.tokenizer.espeak_tokenizer import ESPEAKTokenizer
 
-    def read_timit_wrd(wrd_path: str | Path) -> list[TimitWordSegment]:
-        segments: list[TimitWordSegment] = []
+    def read_timit_wrd(wrd_path: str | Path) -> list[WordSegment]:
+        segments: list[WordSegment] = []
 
         with open(wrd_path, "r", encoding="utf-8") as f:
             for line in f:
@@ -331,7 +331,7 @@ if __name__ == "__main__":
 
                 start, end, word = parts
                 segments.append(
-                    TimitWordSegment(
+                    WordSegment(
                         start_sample=int(start),
                         end_sample=int(end),
                         word=word,
@@ -360,7 +360,7 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"No matching TXT file found for {wrd_path}")
 
     def get_ref_end_sec(
-        wrd_segments: list[TimitWordSegment],
+        wrd_segments: list[WordSegment],
         ref_index: int | slice,
     ) -> float:
         if isinstance(ref_index, int):
@@ -597,7 +597,6 @@ if __name__ == "__main__":
                     tqdm.write(f"     {str(refs):<25} -->  '{hyp}'")
             tqdm.write("-" * 50)
 
-    # 2개짜리와 3개짜리가 병합된 시퀀스를 각각 최대 5개씩 뽑아서 출력합니다.
     print_examples(merged_2plus_examples, "Sequences with 2+ merged words", max_samples=5)
     print_examples(merged_3plus_examples, "Sequences with 3+ merged words", max_samples=5)
 

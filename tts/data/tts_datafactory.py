@@ -122,7 +122,10 @@ class TTSDataFactory:
                     test_speaker_ids=self.dataset_cfg.vctk_test_speakers,
                 )
             elif ds_name == "libritts":
-                parser = LibriTTSParser(self.dataset_cfg.libritts_root)
+                parser = LibriTTSParser(
+                    root_dir=self.dataset_cfg.libritts_root,
+                    subsets=self.dataset_cfg.libritts_subsets,
+                )
             else:
                 print(f"[Warning] Unknown dataset name: {ds_name}. Skipping.")
                 continue

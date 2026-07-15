@@ -14,10 +14,10 @@ TOKENIZER_TYPE: str = "espeak"
 FASTSPEECH2_TOKENIZER_LEXION_PATH = "./tts/baseline/FastSpeech2/lexicon/vctk-lexicon.txt"
 
 N_MELS = 80
-HOP_LENGTH = 128
+HOP_LENGTH = 256
 N_FFT = 1024
 
-DATASETS = ["vctk"]
+DATASETS = ["vctk", "libritts"]
 SEED = 42
 
 
@@ -66,7 +66,12 @@ class DatasetConfigs:
         default_factory=lambda: ["p225", "p226", "p227", "p228", "p229", "p232"]
     )
 
-    libritts_root: str = os.path.join(DATA_PARENT_DIR, "LibriTTS-preprocessed")
+    libritts_root: str = os.path.join(
+        DATA_PARENT_DIR, "LibriTTS-train-clean-100-preprocessed-trimmed"
+    )
+    libritts_subsets: list[str] = field(
+        default_factory=lambda: ["train-clean-100"]
+    )  # train-clean-360
 
     data_cache_dir: str = field(
         default_factory=lambda: os.path.join(DATA_PARENT_DIR, cache_dir_name())
@@ -76,8 +81,8 @@ class DatasetConfigs:
     val_ratio: float = 0.01
     num_buckets: int = 10
 
-    min_duration_sec: float = 1.0
-    max_duration_sec: float = 20.0
+    min_duration_sec: float = 1.5
+    max_duration_sec: float = 15.0
 
     tokenizer_type: str = TOKENIZER_TYPE
     fastspeech2_lexicon_path: str = FASTSPEECH2_TOKENIZER_LEXION_PATH
@@ -88,8 +93,8 @@ class ExperimentConfigs:
     train_time_eval_logging: bool = True
 
     base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments"
-    exp_name: str = "vctk+full"
-    exp_variant: str = "vctk+full"
+    exp_name: str = "vctk+libri+full"
+    exp_variant: str = "vctk+libri+full"
 
     timit_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TRAIN"
     timit_test_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TEST"
@@ -101,7 +106,7 @@ class ExperimentConfigs:
 class TrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    run_name: str = "nd_aligner_vctk_5ms"
+    run_name: str = "nd_aligner_vctk_10ms_coupling_dec"
 
     continue_path: str = ""
     continue_dir: str = ""
@@ -156,8 +161,8 @@ class TrainConfigs:
 @dataclass(frozen=True)
 class LossConfigs:
     # Spec Decoder Loss Scheduling
-    recon_init_weight: float = 10.0
-    recon_final_weight: float = 10.0
+    recon_init_weight: float = 15.0
+    recon_final_weight: float = 15.0
     recon_start_step: int = 0
     recon_end_step: int = 100000
 

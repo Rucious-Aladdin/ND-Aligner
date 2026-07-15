@@ -10,8 +10,8 @@ from silero_vad import get_speech_timestamps, load_silero_vad
 
 from tts.global_constant import SR_16K
 
+from ..audio.utils.freq_filter import lowpass_filter
 from ..config.preprocess.preprocess_config import PreprocessConfigs
-from .utils.freq_filter import lowpass_filter
 
 
 class AudioPreprocessor:

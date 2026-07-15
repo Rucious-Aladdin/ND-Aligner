@@ -1,9 +1,12 @@
 import dataclasses
+from pathlib import Path
 from typing import NamedTuple, cast, override
 
+import librosa
 import torch
 import torch.nn.functional as F
 
+from tts.models.modules.coupling_decoder import CouplingDecoderOutput, SpecCouplingDecoder
 from tts.models.modules.crf_aligner import LinearCRFAligner
 from tts.models.modules.hifigan_vocoder import Generator
 from tts.models.modules.spec_decoder import SpecDecoder
@@ -29,7 +32,33 @@ def init_nd_aligner(
     text_encoder = TextEncoder(**dataclasses.asdict(config.txt_enc))
     spec_encoder = SpecEncoder(**dataclasses.asdict(config.spec_enc))
     aligner = LinearCRFAligner(**dataclasses.asdict(config.aligner))
-    spec_decoder = SpecDecoder(**dataclasses.asdict(config.spec_dec))
+
+    dec_cfg = config.spec_dec
+    if config.spec_dec.decoder_type == "conv1d":
+        spec_decoder = SpecDecoder(
+            in_channels=dec_cfg.in_channels,
+            out_channels=dec_cfg.out_channels,
+            hidden_channels=dec_cfg.hidden_channels,
+            cond_dim=dec_cfg.cond_dim,
+            kernel_sizes=dec_cfg.kernel_sizes,
+            dilation_base=dec_cfg.dilation_base,
+            dropout=dec_cfg.dropout,
+        )
+    elif config.spec_dec.decoder_type == "coupling":
+        spec_decoder = SpecCouplingDecoder(
+            in_channels=dec_cfg.in_channels,
+            out_channels=dec_cfg.out_channels,
+            hidden_channels=dec_cfg.hidden_channels,
+            cond_dim=dec_cfg.cond_dim,
+            cond_proj_dim=dec_cfg.coupling_cond_proj_dim,
+            kernel_size=dec_cfg.coupling_kernel_size,
+            num_refinement_steps=dec_cfg.coupling_num_refine_steps,
+            dilation=dec_cfg.dilation_base,
+            dropout=dec_cfg.dropout,
+            step_emb_dim=dec_cfg.coupling_step_emb_dim,
+            loss_decay_factor=dec_cfg.coupling_loss_decay_factor,
+            normalize_loss_weights=dec_cfg.coupling_normalize_loss_weights,
+        )
 
     # for inference
 
@@ -39,6 +68,8 @@ def init_nd_aligner(
             preprocess_config=config.preprocess,
             tokenizer_type=config.tokenizer_type,
             fastspeech2_lexicon_path=config.fastspeech2_tokenizer_lexion_path,
+            zero_nonspeech_region=config.preprocess.silence_trim,
+            trim_nonspeech_region=True,
             device=device,
         )
     else:
@@ -62,19 +93,19 @@ def init_nd_aligner(
 def init_nd_aligner_training_module(
     config: NDAlignerTrainingModuleConfigs | None = None,
     load_vocoder: bool = False,
+    load_input_maker: bool = True,
     device: str = "cpu",
 ):
-
     if config is None:
         config = NDAlignerTrainingModuleConfigs()
 
     nd_aligner = init_nd_aligner(
         config=config.nd_aligner,
+        load_input_maker=load_input_maker,
         device=device,
     )
 
     vocoder = None
-
     if load_vocoder:
         vocoder = Generator.from_config_path(
             config_path=config.vocoder.config_path,
@@ -122,6 +153,9 @@ class AlignerForward(NamedTuple):
     recon_loss: torch.Tensor
     viterbi_kl_loss: torch.Tensor
 
+    # Optional
+    coupling_dec_out: CouplingDecoderOutput | None
+
 
 class AlignerFeatures(NamedTuple):
     soft_dur: torch.Tensor
@@ -147,6 +181,24 @@ class AlignerFeatures(NamedTuple):
 
     viterbi_path: torch.Tensor | None = None
     viterbi_logp: torch.Tensor | None = None
+
+
+class AlignerInference(NamedTuple):
+    token_ids: torch.Tensor
+    token_lengths: torch.Tensor
+    attn: torch.Tensor  # (B, T_s, T_t)
+    durations: (
+        torch.Tensor
+    )  # (B, T_t) <- IntegerDuration for hard-path, FloatDuration for soft-path
+
+    # basics
+    texts: list[str]  # scripts
+    phones: list[str]
+    words: list[str]
+
+    # grid output
+    phoneme_grid: list[list[tuple[float, float, str]]] | None  # (start_sec, end_sec, phone)
+    word_grid: list[list[tuple[float, float, str]]] | None  # (start_sec, end_sec, word)
 
 
 def compute_beta_binomial_loss(
@@ -304,7 +356,7 @@ class NDAligner(BaseModel):
         text_encoder: TextEncoder,
         spec_encoder: SpecEncoder,
         crf_aligner: LinearCRFAligner,
-        spec_decoder: SpecDecoder | None = None,
+        spec_decoder: SpecDecoder | SpecCouplingDecoder | None = None,
         input_maker: AlignerInputMaker | None = None,
         use_delta_feat: bool = False,
         use_delta_delta_feat: bool = False,
@@ -379,23 +431,65 @@ class NDAligner(BaseModel):
             compute_hard_path=compute_viterbi_loss,
         )
 
-        recon = self.spec_decoder(
-            x=torch.bmm(out.soft_attn, out.h_text.transpose(1, 2)),
-            cond=cond,
-            mask=spec_mask,
-        )
+        aligned_h = torch.bmm(
+            out.soft_attn,
+            out.h_text.transpose(1, 2),
+        )  # (B, T_spec, C_text)
 
         crf_loss = -out.norm_log_z.mean()
 
-        y_recon = y_recon.to(device=recon.device, dtype=recon.dtype)
-        recon_mask = spec_mask.to(device=recon.device, dtype=recon.dtype).unsqueeze(1)
+        valid_spec_mask = spec_mask.bool()  # (B, T_spec), True = valid
 
-        recon_loss = F.l1_loss(
-            recon * recon_mask,
-            y_recon * recon_mask,
-            reduction="sum",
-        )
-        recon_loss = recon_loss / (spec_mask.sum() * n_recon_channels).clamp_min(1.0)
+        coupling_dec_out = None
+        if isinstance(self.spec_decoder, SpecCouplingDecoder):
+            # Coupling decoder:
+            #   input  : (B, T_spec, C_text)
+            #   target : (B, T_spec, n_mels)
+            #   output : mel_hat (B, T_spec, n_mels)
+            y_recon_bt = y_recon.transpose(1, 2).contiguous()
+            y_recon_bt = y_recon_bt.to(
+                device=aligned_h.device,
+                dtype=aligned_h.dtype,
+            )
+
+            dec_out = self.spec_decoder(
+                x=aligned_h,
+                cond=cond,
+                mask=valid_spec_mask,
+                target=y_recon_bt,
+            )
+
+            recon = dec_out.mel_hat
+            recon_loss = dec_out.loss
+            coupling_dec_out = dec_out
+        else:
+            # Original Conv1d decoder:
+            #   input  : (B, T_spec, C_text)
+            #   output : expected (B, n_mels, T_spec)
+            recon_bct = self.spec_decoder(
+                x=aligned_h,
+                cond=cond,
+                mask=spec_mask,
+            )
+
+            y_recon = y_recon.to(
+                device=recon_bct.device,
+                dtype=recon_bct.dtype,
+            )
+
+            recon_mask = spec_mask.to(
+                device=recon_bct.device,
+                dtype=recon_bct.dtype,
+            ).unsqueeze(1)
+
+            recon_loss = F.l1_loss(
+                recon_bct * recon_mask,
+                y_recon * recon_mask,
+                reduction="sum",
+            )
+            recon_loss = recon_loss / (spec_mask.sum() * n_recon_channels).clamp_min(1.0)
+
+            recon = recon_bct.transpose(1, 2)
 
         diag_loss = torch.zeros((), device=x.device)
 
@@ -435,11 +529,12 @@ class NDAligner(BaseModel):
             log_b=out.log_b,
             viterbi_path=out.viterbi_path,
             viterbi_logp=out.viterbi_logp,
-            recon=recon.transpose(1, 2),
+            recon=recon,
             recon_loss=recon_loss,
             crf_loss=crf_loss,
             diag_loss=diag_loss,
             viterbi_kl_loss=viterbi_kl_loss,
+            coupling_dec_out=coupling_dec_out,
         )
 
     @override
@@ -636,17 +731,6 @@ class NDAligner(BaseModel):
         x: torch.Tensor,  # (B, T_text)
         x_lengths: torch.Tensor,  # (B,)
     ) -> torch.Tensor | None:
-        """
-        Build an optional-separator mask for the CRF topology.
-
-        Returns None when optional separator skipping is disabled or when the
-        current batch contains no valid separator tokens. Returning None is
-        intentional: LinearCRFAligner then uses the original strict stay/advance
-        topology and avoids constructing skip-transition tensors.
-
-        A True entry means the corresponding text token may receive zero
-        duration by being skipped through the j-2 -> j transition.
-        """
         if not self.use_optional_skip_sep:
             return None
 
@@ -654,9 +738,6 @@ class NDAligner(BaseModel):
         optional_separator_mask = x.eq(self.separator_token_id) & text_mask
         optional_separator_mask = optional_separator_mask.clone()
 
-        # The start and terminal states are forced by the CRF topology.
-        # Do not allow them to become optional even if a malformed tokenizer
-        # emits the separator id at an endpoint.
         if optional_separator_mask.size(1) > 0:
             batch_idx = torch.arange(
                 optional_separator_mask.size(0),
@@ -671,27 +752,6 @@ class NDAligner(BaseModel):
             return None
 
         return optional_separator_mask
-
-    @staticmethod
-    def _compute_delta_feature(x: torch.Tensor) -> torch.Tensor:
-        """
-        First-order adjacent-frame difference along the time axis.
-
-        Args:
-            x: (B, C, T)
-        Returns:
-            delta: (B, C, T)
-        """
-        if x.dim() != 3:
-            raise ValueError(f"x must have shape (B, C, T), got {tuple(x.shape)}")
-
-        if x.size(-1) <= 1:
-            return torch.zeros_like(x)
-
-        delta = torch.zeros_like(x)
-        delta[..., 1:] = x[..., 1:] - x[..., :-1]
-
-        return delta
 
     @torch.no_grad()
     def _build_spec_encoder_input(
@@ -729,6 +789,345 @@ class NDAligner(BaseModel):
             return y
 
         return torch.cat(features, dim=1)
+
+    @staticmethod
+    def _compute_delta_feature(x: torch.Tensor) -> torch.Tensor:
+        """
+        First-order adjacent-frame difference along the time axis.
+
+        Args:
+            x: (B, C, T)
+        Returns:
+            delta: (B, C, T)
+        """
+        if x.dim() != 3:
+            raise ValueError(f"x must have shape (B, C, T), got {tuple(x.shape)}")
+
+        if x.size(-1) <= 1:
+            return torch.zeros_like(x)
+
+        delta = torch.zeros_like(x)
+        delta[..., 1:] = x[..., 1:] - x[..., :-1]
+
+        return delta
+
+    @torch.no_grad()
+    def inference_from_wavs(
+        self,
+        wav_paths: str | Path | list[str | Path],
+        texts: str | list[str],
+        compute_phone_grid: bool = False,
+        compute_word_grid: bool = False,
+        include_space_token_to_grid: bool = True,
+    ) -> AlignerInference:
+        assert self.spec_encoder is not None
+        assert self.crf_aligner is not None
+        assert self.input_maker is not None
+
+        """
+        Run hard-path alignment directly from waveform paths.
+
+        If AlignerInputMaker trims the waveform, the returned attention and
+        durations are restored to the frame coordinate of the original,
+        untrimmed waveform. Removed leading frames are assigned to the first
+        token and removed trailing frames are assigned to the last valid token.
+
+        When include_space_token_to_grid=True, positive-duration separator
+        tokens are included in both phoneme_grid and word_grid.
+        """
+
+        # ------------------------------------------------------------
+        # 1. Normalize arguments and build model inputs.
+        # ------------------------------------------------------------
+        if isinstance(wav_paths, (str, Path)):
+            wav_path_list = [Path(wav_paths)]
+        else:
+            wav_path_list = [Path(path) for path in wav_paths]
+
+        if isinstance(texts, str):
+            text_list = [texts]
+        else:
+            text_list = list(texts)
+
+        model_device = next(self.parameters()).device
+        self.input_maker.to(device=model_device)
+        self.input_maker.device = model_device
+
+        batch = self.input_maker.make_with_audio(
+            wav_paths=wav_path_list,  # type: ignore
+            scripts=text_list,
+        )
+
+        # ------------------------------------------------------------
+        # 2. Compute a hard alignment on the trimmed spectrogram.
+        # ------------------------------------------------------------
+        assert batch.cond is not None
+
+        features = self.compute_alignments(
+            x=batch.x,
+            x_lengths=batch.x_lengths,
+            y=batch.y,
+            y_lengths=batch.y_lengths,
+            cond=batch.cond,
+            compute_soft_path=False,
+            compute_hard_path=True,
+        )
+
+        assert features.hard_attn is not None
+        assert features.hard_dur is not None
+
+        trimmed_attn = features.hard_attn
+        trimmed_durations = features.hard_dur.round().long()
+
+        # ------------------------------------------------------------
+        # 3. Recover original, untrimmed spectrogram lengths.
+        # ------------------------------------------------------------
+        model_sr = int(self.input_maker.model_sr)
+        hop_length = int(self.input_maker.audio_config.hop_length)
+        batch_size = len(wav_path_list)
+
+        original_model_length_list: list[int] = []
+
+        for wav_path in wav_path_list:
+            wav_np, _ = librosa.load(str(wav_path), sr=model_sr, mono=True)
+            original_length = int(wav_np.shape[0])
+
+            if original_length <= 0:
+                raise RuntimeError(f"Loaded an empty waveform: {wav_path}")
+            original_model_length_list.append(original_length)
+
+        original_model_lengths = torch.tensor(
+            original_model_length_list,
+            dtype=torch.long,
+            device=model_device,
+        )
+
+        start_offset_16k = batch.wav_16k_start_offset.to(device=model_device, dtype=torch.long)
+        end_offset_16k = batch.wav_16k_end_offset.to(device=model_device, dtype=torch.long)
+
+        model_start_samples = torch.div(
+            start_offset_16k * model_sr,
+            16_000,
+            rounding_mode="floor",
+        )
+        model_end_samples = torch.div(
+            (end_offset_16k + 1) * model_sr + 16_000 - 1,
+            16_000,
+            rounding_mode="floor",
+        )
+        model_start_samples = torch.minimum(
+            model_start_samples.clamp_min(0), (original_model_lengths - 1).clamp_min(0)
+        )
+        model_end_samples = torch.minimum(model_end_samples, original_model_lengths)
+        model_end_samples = torch.maximum(model_end_samples, model_start_samples + 1)
+
+        original_spec_lengths = self.input_maker.compute_spec_lengths(original_model_lengths)
+        prefix_spec_lengths = self.input_maker.compute_spec_lengths(model_start_samples).clamp_min(
+            0
+        )
+        suffix_spec_lengths = original_spec_lengths - prefix_spec_lengths - batch.y_lengths
+
+        # ------------------------------------------------------------
+        # 4. Restore attention and durations to the original frame grid.
+        # ------------------------------------------------------------
+        max_original_spec_length = int(original_spec_lengths.max().item())
+        max_text_length = int(batch.x.size(1))
+
+        attn = trimmed_attn.new_zeros(
+            (
+                batch_size,
+                max_original_spec_length,
+                max_text_length,
+            )
+        )
+
+        durations = torch.zeros(
+            (batch_size, max_text_length),
+            dtype=torch.long,
+            device=model_device,
+        )
+
+        for batch_idx in range(batch_size):
+            text_length = int(batch.x_lengths[batch_idx].item())
+            trimmed_spec_length = int(batch.y_lengths[batch_idx].item())
+            original_spec_length = int(original_spec_lengths[batch_idx].item())
+            prefix_length = int(prefix_spec_lengths[batch_idx].item())
+            suffix_length = int(suffix_spec_lengths[batch_idx].item())
+
+            if text_length <= 0:
+                raise RuntimeError(f"Sample {batch_idx} contains no valid text tokens.")
+
+            last_token_idx = text_length - 1
+            trimmed_start = prefix_length
+            trimmed_end = trimmed_start + trimmed_spec_length
+
+            if prefix_length > 0:
+                attn[batch_idx, :prefix_length, 0] = 1.0
+
+            attn[batch_idx, trimmed_start:trimmed_end, :text_length] = trimmed_attn[
+                batch_idx, :trimmed_spec_length, :text_length
+            ]
+
+            if suffix_length > 0:
+                attn[batch_idx, trimmed_end:original_spec_length, last_token_idx] = 1.0
+
+            durations[batch_idx, :text_length] = trimmed_durations[batch_idx, :text_length]
+            durations[batch_idx, 0] += prefix_length
+            durations[batch_idx, last_token_idx] += suffix_length
+
+        # ------------------------------------------------------------
+        # 5. Decode the exact token sequence used by the aligner.
+        # ------------------------------------------------------------
+        tokenizer = self.input_maker.tokenizer
+        separator_id = int(tokenizer.seperator_id)
+
+        phone_symbols_per_sample: list[list[str]] = []
+        phone_strings: list[str] = []
+        word_strings: list[str] = []
+
+        for batch_idx, text in enumerate(batch.texts):
+            text_length = int(batch.x_lengths[batch_idx].item())
+            token_ids_1d = batch.x[batch_idx, :text_length].detach().cpu()
+            symbols_raw = tokenizer.decode_to_symbols(token_ids_1d)
+            symbols = [str(symbol) for symbol in symbols_raw]
+
+            phone_symbols_per_sample.append(symbols)
+            phone_strings.append(tokenizer.to_token_string(text))
+            word_strings.append(" ".join(text.split()))
+
+        sec_per_frame = hop_length / model_sr
+
+        # ------------------------------------------------------------
+        # 6. Optional phoneme grid.
+        # ------------------------------------------------------------
+        phoneme_grid: list[list[tuple[float, float, str]]] | None = None
+
+        if compute_phone_grid:
+            phoneme_grid = []
+
+            for batch_idx, symbols in enumerate(phone_symbols_per_sample):
+                text_length = int(batch.x_lengths[batch_idx].item())
+
+                current_frame = 0
+                sample_grid: list[tuple[float, float, str]] = []
+
+                for token_idx in range(text_length):
+                    duration = int(durations[batch_idx, token_idx].item())
+
+                    start_frame = current_frame
+                    current_frame += duration
+
+                    if duration <= 0:
+                        continue
+
+                    token_id = int(batch.x[batch_idx, token_idx].item())
+
+                    if not include_space_token_to_grid and token_id == separator_id:
+                        continue
+
+                    sample_grid.append(
+                        (
+                            start_frame * sec_per_frame,
+                            current_frame * sec_per_frame,
+                            symbols[token_idx],
+                        )
+                    )
+
+                phoneme_grid.append(sample_grid)
+
+        # ------------------------------------------------------------
+        # 7. Optional word grid.
+        # ------------------------------------------------------------
+        word_grid: list[list[tuple[float, float, str]]] | None = None
+
+        if compute_word_grid:
+            mapper = self.input_maker.word_mapper
+            word_grid = []
+
+            for batch_idx, text in enumerate(batch.texts):
+                text_length = int(batch.x_lengths[batch_idx].item())
+
+                symbols = phone_symbols_per_sample[batch_idx]
+                ref_words = text.split()
+
+                matched = mapper(ref_seqs=ref_words, hyp_seqs=symbols)
+                cumulative_frames = torch.cat(
+                    [durations.new_zeros(1), durations[batch_idx, :text_length].cumsum(dim=0)],
+                    dim=0,
+                )
+
+                match_by_hyp_start: dict[
+                    int,
+                    tuple[slice, slice],
+                ] = {
+                    cast(int, hyp_slice.start): (ref_slice, hyp_slice)
+                    for ref_slice, hyp_slice in zip(
+                        matched.ref_matched_indices,
+                        matched.hyp_matched_indices,
+                        strict=True,
+                    )
+                }
+
+                sample_grid: list[tuple[float, float, str]] = []
+
+                token_idx = 0
+
+                while token_idx < text_length:
+                    matched_item = match_by_hyp_start.get(token_idx)
+
+                    if matched_item is not None:
+                        ref_slice, hyp_slice = matched_item
+
+                        ref_start = cast(int, ref_slice.start)
+                        ref_stop = cast(int, ref_slice.stop)
+                        hyp_start = cast(int, hyp_slice.start)
+                        hyp_stop = cast(int, hyp_slice.stop)
+
+                        start_frame = int(cumulative_frames[hyp_start].item())
+                        end_frame = int(cumulative_frames[hyp_stop].item())
+
+                        if end_frame > start_frame:
+                            label = " ".join(ref_words[ref_start:ref_stop])
+
+                            sample_grid.append(
+                                (
+                                    start_frame * sec_per_frame,
+                                    end_frame * sec_per_frame,
+                                    label,
+                                )
+                            )
+
+                        token_idx = hyp_stop
+                        continue
+
+                    token_id = int(batch.x[batch_idx, token_idx].item())
+                    if include_space_token_to_grid and token_id == separator_id:
+                        start_frame = int(cumulative_frames[token_idx].item())
+                        end_frame = int(cumulative_frames[token_idx + 1].item())
+
+                        if end_frame > start_frame:
+                            sample_grid.append(
+                                (
+                                    start_frame * sec_per_frame,
+                                    end_frame * sec_per_frame,
+                                    " ",
+                                )
+                            )
+                    token_idx += 1
+
+                word_grid.append(sample_grid)
+
+        return AlignerInference(
+            token_ids=batch.x,
+            token_lengths=batch.x_lengths,
+            attn=attn,
+            durations=durations,
+            texts=batch.texts,
+            phones=phone_strings,
+            words=word_strings,
+            phoneme_grid=phoneme_grid,
+            word_grid=word_grid,
+        )
 
 
 class NDAlignerTrainingModuleForward(NamedTuple):
@@ -797,10 +1196,13 @@ class NDAlignerTrainingModule(BaseModel):
             ),
         )
 
-        total_loss = self._compute_total_loss(
-            out=out,
-            loss_weights=loss_weights,
-        )
+        total_loss = out.crf_loss.new_zeros(())
+        for name, weight in loss_weights._asdict().items():
+            if weight == 0.0:
+                continue
+            loss_name = name.removesuffix("_weight")
+            loss = getattr(out, loss_name)
+            total_loss = total_loss + weight * loss
 
         return NDAlignerTrainingModuleForward(
             aligner_output=out,
@@ -818,26 +1220,3 @@ class NDAlignerTrainingModule(BaseModel):
             wav = self.vocoder(x)
 
         return wav
-
-    @torch.no_grad()
-    def compute_speaker_embeddings(self, waveform: torch.Tensor) -> torch.Tensor:
-        assert self.nd_aligner.input_maker is not None, "Speaker encoder is not initialized."
-        return self.nd_aligner.input_maker.speaker_encoder(waveform)
-
-    def _compute_total_loss(
-        self,
-        out: AlignerForward,
-        loss_weights: NDAlignerLossWeights,
-    ) -> torch.Tensor:
-        total_loss = out.crf_loss.new_zeros(())
-
-        for name, weight in loss_weights._asdict().items():
-            if weight == 0.0:
-                continue
-
-            loss_name = name.removesuffix("_weight")
-            loss = getattr(out, loss_name)
-
-            total_loss = total_loss + weight * loss
-
-        return total_loss

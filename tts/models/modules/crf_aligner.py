@@ -239,16 +239,8 @@ class LinearCRFAligner(nn.Module):
         if optional_separator_mask is not None:
             if optional_separator_mask.dim() == 3:
                 optional_separator_mask = optional_separator_mask.squeeze(1)
+
             optional_separator_mask = optional_separator_mask.bool() & text_mask
-
-            min_required_text_lengths = text_lengths - optional_separator_mask.sum(dim=-1).long()
-
-            if torch.any(spec_lengths < min_required_text_lengths):
-                raise ValueError(
-                    "Monotone alignment with optional separators requires "
-                    + "spec_lengths[b] >= number of non-optional text tokens "
-                    + "for every batch item."
-                )
         else:
             if torch.any(spec_lengths < text_lengths):
                 raise ValueError(
@@ -289,6 +281,38 @@ class LinearCRFAligner(nn.Module):
                 T_speech=T_speech,
                 T_text=T_text,
                 device=device,
+            )
+
+        batch_idx = torch.arange(
+            spec_lengths.size(0),
+            device=device,
+        )
+
+        has_valid_path = reachable[
+            batch_idx,
+            spec_lengths - 1,
+            text_lengths - 1,
+        ]
+
+        if not torch.all(has_valid_path) and optional_separator_mask is not None:
+            invalid_batches = torch.nonzero(
+                ~has_valid_path,
+                as_tuple=False,
+            ).flatten()
+
+            details = [
+                {
+                    "batch": int(b),
+                    "spec_length": int(spec_lengths[b]),
+                    "text_length": int(text_lengths[b]),
+                    "optional_count": int(optional_separator_mask[b, : text_lengths[b]].sum()),
+                }
+                for b in invalid_batches.detach().cpu().tolist()
+            ]
+
+            raise ValueError(
+                "No valid monotone path exists under the optional-separator "
+                + f"topology. Invalid samples: {details}"
             )
 
         dp_valid = length_valid & reachable
@@ -414,6 +438,7 @@ class LinearCRFAligner(nn.Module):
         alpha_t = self.__initial_dp_score(
             log_b=log_b,
             dp_valid=dp_valid,
+            optional_separator_mask=optional_separator_mask,
         )
         log_alpha_steps.append(alpha_t)
 
@@ -539,6 +564,7 @@ class LinearCRFAligner(nn.Module):
         delta_t = self.__initial_dp_score(
             log_b=log_b,
             dp_valid=dp_valid,
+            optional_separator_mask=optional_separator_mask,
         )
         delta_steps.append(delta_t)
 
@@ -736,17 +762,41 @@ class LinearCRFAligner(nn.Module):
         self,
         log_b: torch.Tensor,
         dp_valid: torch.Tensor,
+        optional_separator_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
-        Common initialization for forward alpha and Viterbi delta.
+        Initial DP score.
 
-        z_0 is forced to be token 0.
+        Normally:
+            z_0 = 0
+
+        If token 0 is optional:
+            z_0 in {0, 1}
         """
         B, _, T_text = log_b.shape
 
-        score = log_b.new_full((B, T_text), self.neg_large)
+        score = log_b.new_full(
+            (B, T_text),
+            self.neg_large,
+        )
+
+        # Normal start from token 0.
         score[:, 0] = log_b[:, 0, 0]
-        score = score.masked_fill(~dp_valid[:, 0, :], self.neg_large)
+
+        # Skip the first token and start from token 1.
+        if optional_separator_mask is not None and T_text >= 2:
+            can_skip_first = optional_separator_mask[:, 0]
+
+            score[:, 1] = torch.where(
+                can_skip_first,
+                log_b[:, 0, 1],
+                score[:, 1],
+            )
+
+        score = score.masked_fill(
+            ~dp_valid[:, 0, :],
+            self.neg_large,
+        )
 
         return score
 
@@ -906,19 +956,18 @@ class LinearCRFAligner(nn.Module):
         device: torch.device,
     ) -> torch.Tensor:
         """
-        Reachability mask for monotone paths with optional separator skip.
+        Reachability mask for monotone paths with optional separator skips.
 
         Allowed transitions:
             j -> j      stay
             j -> j + 1  advance
-            j -> j + 2  skip, iff token j + 1 is optional separator
+            j -> j + 2  skip token j + 1, iff that token is optional
 
-        Equivalently, for arrival state j:
-            j - 2 -> j  skip, iff token j - 1 is optional separator
+        Initial states:
+            z_0 = 0
+            z_0 = 1, iff token 0 is optional
 
-        This function is only called when optional_separator_mask is not None.
-        If the provided mask is all False, it reduces to strict monotone reachability,
-        but the None path avoids constructing optional-skip tensors entirely.
+        The terminal state remains fixed to text_lengths[b] - 1.
         """
         B = spec_lengths.size(0)
         inf = torch.iinfo(torch.long).max // 4
@@ -929,23 +978,34 @@ class LinearCRFAligner(nn.Module):
             dtype=torch.long,
             device=device,
         )
+
         min_prefix[:, 0] = 1
 
-        for j in range(1, T_text):
-            # Normal advance: j - 1 -> j.
-            best = min_prefix[:, j - 1] + 1
+        if T_text >= 2:
+            min_prefix[:, 1] = torch.where(
+                optional_separator_mask[:, 0],
+                torch.ones(B, dtype=torch.long, device=device),
+                torch.full(
+                    (B,),
+                    2,
+                    dtype=torch.long,
+                    device=device,
+                ),
+            )
 
-            # Optional skip: j - 2 -> j, iff token j - 1 is optional.
-            if j >= 2:
-                skip_allowed = optional_separator_mask[:, j - 1]
-                skip_cost = min_prefix[:, j - 2] + 1
-                best = torch.where(
-                    skip_allowed,
-                    torch.minimum(best, skip_cost),
-                    best,
-                )
+        for j in range(2, T_text):
+            # Normal advance:
+            normal_cost = min_prefix[:, j - 1] + 1
 
-            min_prefix[:, j] = best
+            # Optional skip:
+            skip_cost = min_prefix[:, j - 2] + 1
+            skip_allowed = optional_separator_mask[:, j - 1]
+
+            min_prefix[:, j] = torch.where(
+                skip_allowed,
+                torch.minimum(normal_cost, skip_cost),
+                normal_cost,
+            )
 
         min_suffix = torch.full(
             (B, T_text),
@@ -956,33 +1016,42 @@ class LinearCRFAligner(nn.Module):
 
         batch_idx = torch.arange(B, device=device)
         final_j = text_lengths - 1
+
         min_suffix[batch_idx, final_j] = 1
 
         for j in range(T_text - 2, -1, -1):
-            # Do not overwrite each sample's terminal state or padded states.
             update_mask = j < final_j
 
-            # Normal advance: j -> j + 1.
-            best = min_suffix[:, j + 1] + 1
+            # Normal advance:
+            normal_cost = min_suffix[:, j + 1] + 1
+            best_cost = normal_cost
 
-            # Optional skip: j -> j + 2, iff token j + 1 is optional.
+            # Optional skip:
             if j + 2 < T_text:
-                skip_allowed = optional_separator_mask[:, j + 1]
                 skip_cost = min_suffix[:, j + 2] + 1
-                best = torch.where(
+                skip_allowed = optional_separator_mask[:, j + 1]
+
+                best_cost = torch.where(
                     skip_allowed,
-                    torch.minimum(best, skip_cost),
-                    best,
+                    torch.minimum(normal_cost, skip_cost),
+                    normal_cost,
                 )
 
             min_suffix[:, j] = torch.where(
                 update_mask,
-                best,
+                best_cost,
                 min_suffix[:, j],
             )
 
-        t = torch.arange(T_speech, device=device).view(1, T_speech, 1)
-        j = torch.arange(T_text, device=device).view(1, 1, T_text)
+        t = torch.arange(
+            T_speech,
+            device=device,
+        ).view(1, T_speech, 1)
+
+        j = torch.arange(
+            T_text,
+            device=device,
+        ).view(1, 1, T_text)
 
         T = spec_lengths.view(B, 1, 1)
         N = text_lengths.view(B, 1, 1)
@@ -990,6 +1059,7 @@ class LinearCRFAligner(nn.Module):
         within_lengths = (t < T) & (j < N)
 
         reachable_from_start = (min_prefix.view(B, 1, T_text) - 1) <= t
+
         completable_to_end = (min_suffix.view(B, 1, T_text) - 1) <= (T - 1 - t)
 
         return within_lengths & reachable_from_start & completable_to_end

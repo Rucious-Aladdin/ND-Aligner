@@ -23,28 +23,21 @@ class ARPATokenizer(BaseTokenizer):
     English ARPAbet tokenizer with optional special tokens. (FastSpeech2-compatible)
 
     Special token ids are appended after the original FastSpeech2 symbol table:
-
-        <BOS>   -> len(symbols)
-        <EOS>   -> len(symbols) + 1
         <BLANK> -> len(symbols) + 2
         <UNK>   -> len(symbols) + 3
 
     Therefore, the downstream text embedding size must be tokenizer.n_vocab.
     """
 
-    BOS: ClassVar[str] = "<BOS>"
-    EOS: ClassVar[str] = "<EOS>"
     BLANK: ClassVar[str] = "<BLANK>"
     UNK: ClassVar[str] = "<UNK>"
 
     def __init__(
         self,
         lexicon_path: str | Path | None = None,
-        add_bos_eos: bool = True,
         add_blank_between_words: bool = True,
     ):
         self.lexicon_path = Path(lexicon_path) if lexicon_path is not None else None
-        self.add_bos_eos = add_bos_eos
         self.add_blank_between_words = add_blank_between_words
 
         if self.lexicon_path is not None:
@@ -65,15 +58,11 @@ class ARPATokenizer(BaseTokenizer):
         self.unk_id = self.base_vocab_size + 3
 
         self._ignore_symbols: set[str] = {
-            self.BOS,
-            self.EOS,
             self.BLANK,
             self.UNK,
         }
 
         self.special_token_to_id = {
-            self.BOS: self.bos_id,
-            self.EOS: self.eos_id,
             self.BLANK: self.blank_id,
             self.UNK: self.unk_id,
         }
@@ -82,7 +71,6 @@ class ARPATokenizer(BaseTokenizer):
     def to_phone_tokens(
         self,
         text: str,
-        include_special_tokens: bool | None = None,
     ) -> list[str]:
         """
         Convert raw text into a token-level phone sequence.
@@ -90,11 +78,9 @@ class ARPATokenizer(BaseTokenizer):
         Example:
             "Please call Stella."
             ->
-            ["<BOS>", "P", "L", "IY1", "Z", "<BLANK>",
-             "K", "AO1", "L", "<BLANK>", "S", "T", "EH1", "L", "AH0", "<EOS>"]
+            ["<BLANK>", "P", "L", "IY1", "Z", "<BLANK>",
+             "K", "AO1", "L", "<BLANK>", "S", "T", "EH1", "L", "AH0", "<BLANK>"]
         """
-        if include_special_tokens is None:
-            include_special_tokens = self.add_bos_eos
 
         words = self._split_words(text)
 
@@ -105,12 +91,8 @@ class ARPATokenizer(BaseTokenizer):
                 phone_tokens.append(self.BLANK)
 
             phone_tokens.extend(self._word_to_phones(word))
-
-        if include_special_tokens:
-            phone_tokens.insert(0, self.BLANK)
-            phone_tokens.insert(0, self.BOS)
-            phone_tokens.append(self.BLANK)
-            phone_tokens.append(self.EOS)
+        phone_tokens.insert(0, self.BLANK)
+        phone_tokens.append(self.BLANK)
 
         return phone_tokens
 
@@ -118,23 +100,16 @@ class ARPATokenizer(BaseTokenizer):
     def to_token_string(self, text: str) -> str:
         """
         Human-readable token string for word mapping/debugging.
-
-        BOS/EOS are excluded.
         BLANK is excluded from the string because word-span keys are built by
         concatenating token chunks.
         """
-        tokens = self.to_phone_tokens(
-            text,
-            include_special_tokens=False,
-        )
+        tokens = self.to_phone_tokens(text)
 
         tokens = [
             token
             for token in tokens
             if token
             not in {
-                self.BOS,
-                self.EOS,
                 self.BLANK,
                 self.UNK,
             }
@@ -150,13 +125,9 @@ class ARPATokenizer(BaseTokenizer):
         Returns:
             np.ndarray, shape (T,)
 
-        The returned sequence may contain ids beyond len(symbols) when
-        <BOS>, <EOS>, or <BLANK> are enabled.
+        The returned sequence may contain ids beyond len(symbols) when <BLANK> is enabled.
         """
-        phone_tokens = self.to_phone_tokens(
-            text,
-            include_special_tokens=self.add_bos_eos,
-        )
+        phone_tokens = self.to_phone_tokens(text)
 
         sequence: list[int] = []
         phone_chunk: list[str] = []
@@ -276,8 +247,6 @@ class ARPATokenizer(BaseTokenizer):
     @override
     def vocab_labels(self) -> list[str]:
         labels = list(symbols)
-        labels.append(self.BOS)
-        labels.append(self.EOS)
         labels.append(self.BLANK)
         labels.append(self.UNK)
         return labels

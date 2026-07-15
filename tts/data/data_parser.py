@@ -194,13 +194,22 @@ class VCTKParser(BaseDatasetParser):
 
 
 class LibriTTSParser(BaseDatasetParser):
-    def __init__(self, root_dir: str):
+    def __init__(
+        self,
+        root_dir: str,
+        subsets: list[str] | None = None,
+    ):
         self.root_dir = root_dir
+        self.subsets = subsets
 
     @override
     def parse(self) -> ParsedItems:
         items = []
-        subsets = ["train-clean-100", "train-clean-360"]
+
+        if self.subsets is None:
+            subsets = ["train-clean-100", "train-clean-360"]
+        else:
+            subsets = self.subsets
 
         for subset in subsets:
             subset_dir = os.path.join(self.root_dir, subset)

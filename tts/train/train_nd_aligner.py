@@ -294,6 +294,39 @@ class NDAlignerTrainer(
                     step,
                     prefix="Train",
                 )
+
+                if output.coupling_dec_out is not None:
+                    dec = self.model.nd_aligner.spec_decoder
+
+                    num_stages = len(output.coupling_dec_out.mel_losses)
+                    decay = float(getattr(dec, "loss_decay_factor", 1.0))
+                    normalize = bool(getattr(dec, "normalize_loss_weights", False))
+
+                    weights_t = torch.tensor(
+                        [decay**i for i in range(num_stages)],
+                        device=output.coupling_dec_out.loss.device,
+                        dtype=output.coupling_dec_out.loss.dtype,
+                    )
+
+                    if normalize:
+                        weights_t = weights_t / weights_t.sum().clamp_min(1e-8)
+
+                    coupling_metrics = {
+                        "Weighted_Loss": float(output.coupling_dec_out.loss.detach().cpu()),
+                    }
+
+                    for i, loss_i in enumerate(output.coupling_dec_out.mel_losses):
+                        coupling_metrics[f"Mel_Loss/stage_{i}"] = float(loss_i.detach().cpu())
+                        coupling_metrics[f"Mel_Weight/stage_{i}"] = float(
+                            weights_t[i].detach().cpu()
+                        )
+
+                    self.logger.log_metrics(
+                        coupling_metrics,
+                        step,
+                        prefix="Train/CouplingDecoder",
+                    )
+
                 self.logger.log_metrics(
                     {
                         f"{k.capitalize()}_Weight": v
@@ -371,6 +404,36 @@ class NDAlignerTrainer(
                 prefix="Valid",
             )
 
+            if last_output is not None and last_output.coupling_dec_out is not None:
+                dec = self.model.nd_aligner.spec_decoder
+
+                num_stages = len(last_output.coupling_dec_out.mel_losses)
+                decay = float(getattr(dec, "loss_decay_factor", 1.0))
+                normalize = bool(getattr(dec, "normalize_loss_weights", False))
+
+                weights_t = torch.tensor(
+                    [decay**i for i in range(num_stages)],
+                    device=last_output.coupling_dec_out.loss.device,
+                    dtype=last_output.coupling_dec_out.loss.dtype,
+                )
+
+                if normalize:
+                    weights_t = weights_t / weights_t.sum().clamp_min(1e-8)
+
+                coupling_metrics = {
+                    "Weighted_Loss": float(last_output.coupling_dec_out.loss.detach().cpu()),
+                }
+
+                for i, loss_i in enumerate(last_output.coupling_dec_out.mel_losses):
+                    coupling_metrics[f"Mel_Loss/stage_{i}"] = float(loss_i.detach().cpu())
+                    coupling_metrics[f"Mel_Weight/stage_{i}"] = float(weights_t[i].detach().cpu())
+
+                self.logger.log_metrics(
+                    coupling_metrics,
+                    step,
+                    prefix="Valid/CouplingDecoder",
+                )
+
             if last_batch is not None and last_output is not None:
                 self._log_visuals(
                     last_batch,
@@ -410,6 +473,14 @@ class NDAlignerTrainer(
             plot_spectrogram(out.recon[0, :s_len].transpose(0, 1)),
             step,
         )
+
+        if out.coupling_dec_out is not None:
+            for i, mel_i in enumerate(out.coupling_dec_out.mel_outputs):
+                self.logger.log_figure(
+                    f"{prefix}/Mel_st_{i}",
+                    plot_spectrogram(mel_i[0, :recon_len].detach().transpose(0, 1)),
+                    step,
+                )
 
         if self.data_config.audio.feature_type != "mel":
             self.logger.log_figure(
@@ -684,7 +755,7 @@ class NDAlignerTrainer(
         token_ids: torch.Tensor,
     ) -> list[str]:
         """
-        Decode token ids into per-token IPA/BOS/EOS labels for y-axis plotting.
+        Decode token ids into per-token IPA labels for y-axis plotting.
 
         Args:
             token_ids: (T,)

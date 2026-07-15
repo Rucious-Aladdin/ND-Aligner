@@ -12,9 +12,12 @@ from .data_config import (
     AudioConfigs,
 )
 
-SPEC_DIM = 192
-TEXT_DIM = 192
+SPEC_DIM = 256
+TEXT_DIM = 256
 SPK_COND_DIM = 192  # ECAPA-TDNN
+
+SHARED_HIDDEN_DIM = 256
+DEC_HIDDEN_DIM = 256
 
 USE_DELTA_FEAT = False
 USE_DELTA_DELTA_FEAT = False
@@ -42,7 +45,7 @@ class TextEncoderConfigs:
     # common dimensions
     n_vocab: int = field(default_factory=n_vocabs)
     dim_out: int = TEXT_DIM
-    dim_hidden: int = 256
+    dim_hidden: int = SHARED_HIDDEN_DIM
     dim_cond: int = SPK_COND_DIM
     kernel_sizes: list[int] = field(default_factory=lambda: [1])
 
@@ -57,18 +60,27 @@ class SpecEncoderConfigs:
     # architectures
     kernel_size: int = 3
     dropout_p: float = 0.15
-    dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 2, 2, 3, 3])
+    dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 1])
 
 
 @dataclass(frozen=True)
 class SpecDecoderConfigs:
+    decoder_type: str = "coupling"  # conv1d, "coupling"
+
     in_channels: int = TEXT_DIM
     out_channels: int = N_MELS
-    hidden_channels: int = 192
+    hidden_channels: int = DEC_HIDDEN_DIM
     cond_dim: int = SPK_COND_DIM
     kernel_sizes: list[int] = field(default_factory=lambda: [3, 3, 3, 3])
     dilation_base: int = 1
     dropout: float = 0.15
+
+    coupling_cond_proj_dim: int = 192
+    coupling_num_refine_steps: int = 6
+    coupling_step_emb_dim: int = 64
+    coupling_loss_decay_factor: float = 0.5
+    coupling_kernel_size: int = 3
+    coupling_normalize_loss_weights: bool = True
 
 
 @dataclass(frozen=True)
@@ -76,7 +88,7 @@ class CRFAlignerConfigs:
     dim_spec: int = SPEC_DIM
     dim_text: int = TEXT_DIM
     dim_cond: int = SPK_COND_DIM
-    dim_unary_latent: int = 48
+    dim_unary_latent: int = 128
     cond_channels: int = 32
 
     # unary network configs
@@ -86,9 +98,9 @@ class CRFAlignerConfigs:
     unary_scale_init: float = -2.0
 
     # conv only configs
-    conv_num_layers: int = 12
+    conv_num_layers: int = 6
     conv_num_groups: int = 8
-    conv_dim_hidden: int = 48
+    conv_dim_hidden: int = 64
     conv_kernel_size: list[int] = field(default_factory=lambda: [3, 3])
 
 

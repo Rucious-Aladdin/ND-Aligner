@@ -8,7 +8,7 @@ import torch
 from nltk.tokenize import word_tokenize
 
 from .base_tokenizer import BaseTokenizer, TokenIdInput
-from .espeak_letters import BOS, EOS, IGNORE_SYMBOLS, SYMBOL_DICTS
+from .espeak_letters import IGNORE_SYMBOLS, SYMBOL_DICTS
 
 
 class TextCleaner:
@@ -29,8 +29,6 @@ class TextCleaner:
     def decode(self, token_ids: torch.Tensor | list[int]) -> str:
         """
         Decode token ids back to raw IPA symbol sequence.
-        BOS/EOS are preserved if they are included in token_ids.
-
         Args:
             token_ids: (T,) LongTensor or list[int]
 
@@ -59,11 +57,9 @@ class ESPEAKTokenizer(BaseTokenizer):
     def encode(self, text: str) -> list[int]:
         ps = self.to_ipa(text)
         tokens = [
-            SYMBOL_DICTS[BOS],
             SYMBOL_DICTS[self.blank],
         ] + self.cleaner(ps)
         tokens.append(SYMBOL_DICTS[self.blank])
-        tokens.append(SYMBOL_DICTS[EOS])
         return tokens
 
     @override

@@ -10,9 +10,9 @@ import librosa
 import torch
 from tqdm import tqdm
 
-from tts.audio.audio_preprocessor import AudioPreprocessor
 from tts.config.utils.io import load_config
 from tts.models.modules.spk_encoder import ECAPASpeakerEncoder
+from tts.preprocess.audio_preprocessor import AudioPreprocessor
 
 from ..config.preprocess.preprocess_config import PreprocessConfigs
 

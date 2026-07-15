@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import csv
+import json
 import math
 import random
+from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import NamedTuple
 
@@ -13,9 +16,9 @@ from tts.models.modules.hifigan_vocoder import Generator
 from tts.models.ndaligner import AlignerFeatures, NDAligner
 from tts.models.utils.input_maker import AlignerInputMaker
 
+from ...models.utils.word_mapper import MatchedWords, WordSegment, WordsMapper
 from ..utils.entropy import compute_framewise_entropy
 from ..utils.mcd_dtw import compute_mcd_dtw
-from .word_mapper import MatchedWords, TimitWordSegment, WordsMapper
 
 
 class TIMITMetrics(NamedTuple):
@@ -221,6 +224,9 @@ class TIMITBenchMarker:
             scripts=[text],
         )
 
+        wav_16k_start_offset = int(batch.wav_16k_start_offset[0].item())
+        _wav_16k_end_offset = int(batch.wav_16k_end_offset[0].item())
+
         cond = (
             torch.tensor(
                 0.0,
@@ -274,12 +280,14 @@ class TIMITBenchMarker:
                 hard_dur=hard_dur,
                 features=features,
                 t_mel=batch.y.size(2),
+                wav_16k_start_offset=wav_16k_start_offset,
             )
 
         boundary_errors = self._get_eval_instance(
             wrd_segments=wrd_segments,
             matched_words=matched,
             hard_dur=hard_dur,
+            wav_16k_start_offset=wav_16k_start_offset,
         )
 
         spec_mask = self._make_spec_mask(
@@ -384,11 +392,15 @@ class TIMITBenchMarker:
 
     def _get_eval_instance(
         self,
-        wrd_segments: list[TimitWordSegment],
+        wrd_segments: list[WordSegment],
         matched_words: MatchedWords,
         hard_dur: list[int],
+        wav_16k_start_offset: int,
     ) -> list[float]:
         sec_per_frame = self.hyp_hop_length / self.hyp_audio_sr
+
+        # wav_16k offset은 항상 16-kHz sample 좌표이다.
+        start_offset_sec = wav_16k_start_offset / 16000.0
 
         token_starts: list[float] = []
         token_ends: list[float] = []
@@ -398,10 +410,12 @@ class TIMITBenchMarker:
             start_sec = max(0.0, current_frame * sec_per_frame)
             current_frame += int(dur)
             end_sec = max(0.0, current_frame * sec_per_frame)
+
             token_starts.append(start_sec)
             token_ends.append(end_sec)
 
         errors: list[float] = []
+
         for ref_slice, hyp_slice in zip(
             matched_words.ref_matched_indices,
             matched_words.hyp_matched_indices,
@@ -409,11 +423,16 @@ class TIMITBenchMarker:
         ):
             if ref_slice.start is None or ref_slice.stop is None:
                 raise ValueError(f"Invalid ref slice: {ref_slice}")
+
             if hyp_slice.start is None or hyp_slice.stop is None:
                 raise ValueError(f"Invalid hyp slice: {hyp_slice}")
 
-            gt_start = wrd_segments[ref_slice.start].start_sample / self.ref_audio_sr
-            gt_end = wrd_segments[ref_slice.stop - 1].end_sample / self.ref_audio_sr
+            gt_start = (
+                wrd_segments[ref_slice.start].start_sample / self.ref_audio_sr - start_offset_sec
+            )
+            gt_end = (
+                wrd_segments[ref_slice.stop - 1].end_sample / self.ref_audio_sr - start_offset_sec
+            )
 
             pred_start = token_starts[hyp_slice.start]
             pred_end = token_ends[hyp_slice.stop - 1]
@@ -424,8 +443,8 @@ class TIMITBenchMarker:
         return errors
 
     @staticmethod
-    def _read_wrd(wrd_path: Path) -> list[TimitWordSegment]:
-        segments: list[TimitWordSegment] = []
+    def _read_wrd(wrd_path: Path) -> list[WordSegment]:
+        segments: list[WordSegment] = []
         with open(wrd_path, "r", encoding="utf-8") as f:
             for line in f:
                 line = line.strip()
@@ -433,7 +452,7 @@ class TIMITBenchMarker:
                     continue
                 parts = line.split(maxsplit=2)
                 segments.append(
-                    TimitWordSegment(
+                    WordSegment(
                         start_sample=int(parts[0]),
                         end_sample=int(parts[1]),
                         word=parts[2],
@@ -482,12 +501,13 @@ class TIMITBenchMarker:
     def _save_alignment_figure(
         self,
         save_path: str | Path,
-        wrd_segments: list[TimitWordSegment],
+        wrd_segments: list[WordSegment],
         matched_words: MatchedWords,
         hyp_symbols: list[str],
         hard_dur: list[int],
         features: AlignerFeatures,
         t_mel: int,
+        wav_16k_start_offset: int,
     ) -> None:
         import matplotlib
 
@@ -507,6 +527,7 @@ class TIMITBenchMarker:
         gt_mat, gt_labels = self._build_ground_truth_word_matrix(
             wrd_segments=wrd_segments,
             t_mel=t_mel,
+            wav_16k_start_offset=wav_16k_start_offset,
         )
 
         collapsed_mat, collapsed_labels = self._build_collapsed_word_matrix(
@@ -621,28 +642,45 @@ class TIMITBenchMarker:
 
     def _build_ground_truth_word_matrix(
         self,
-        wrd_segments: list[TimitWordSegment],
+        wrd_segments: list[WordSegment],
         t_mel: int,
+        wav_16k_start_offset: int,
     ) -> tuple[torch.Tensor, list[str]]:
         sec_per_frame = self.hyp_hop_length / self.hyp_audio_sr
-        mat = torch.zeros(len(wrd_segments), t_mel, dtype=torch.float32)
+        start_offset_sec = wav_16k_start_offset / 16000.0
+        total_duration_sec = t_mel * sec_per_frame
+
+        mat = torch.zeros(
+            len(wrd_segments),
+            t_mel,
+            dtype=torch.float32,
+        )
         labels: list[str] = []
 
         for row_idx, seg in enumerate(wrd_segments):
-            start_sec = seg.start_sample / self.ref_audio_sr
-            end_sec = seg.end_sample / self.ref_audio_sr
+            # Original TIMIT coordinates -> trimmed waveform coordinates
+            start_sec = seg.start_sample / self.ref_audio_sr - start_offset_sec
+            end_sec = seg.end_sample / self.ref_audio_sr - start_offset_sec
 
-            start_frame = max(0, int(math.floor(start_sec / sec_per_frame)))
-            end_frame = min(t_mel, int(math.ceil(end_sec / sec_per_frame)))
+            labels.append(seg.word)
 
-            if start_frame >= t_mel:
-                labels.append(seg.word)
+            # VAD trim 범위 밖에 완전히 놓인 segment는 표시하지 않는다.
+            if end_sec <= 0.0 or start_sec >= total_duration_sec:
                 continue
+
+            start_frame = max(
+                0,
+                int(math.floor(start_sec / sec_per_frame)),
+            )
+            end_frame = min(
+                t_mel,
+                int(math.ceil(end_sec / sec_per_frame)),
+            )
+
             if end_frame <= start_frame:
                 end_frame = min(t_mel, start_frame + 1)
 
             mat[row_idx, start_frame:end_frame] = 1.0
-            labels.append(seg.word)
 
         return mat, labels
 
@@ -755,3 +793,525 @@ class TIMITBenchMarker:
     ) -> torch.Tensor:
         idx = torch.arange(t_spec, device=device).unsqueeze(0)
         return (idx < y_lengths.unsqueeze(1)).to(dtype=dtype)
+
+
+@dataclass(frozen=True)
+class TIMITAnalysisRow:
+    sample_id: str
+    wav_path: str
+    txt_path: str
+    wrd_path: str
+    text: str
+
+    num_boundaries: int
+
+    mean_wbe_ms: float
+    median_wbe_ms: float
+    p90_wbe_ms: float
+    p95_wbe_ms: float
+    max_wbe_ms: float
+
+    p_10ms: float
+    p_25ms: float
+    p_50ms: float
+    p_100ms: float
+
+    posterior_entropy: float | None
+    mcd_dtw: float | None
+
+
+class TIMITErrorAnalyzer(TIMITBenchMarker):
+    """
+    Error-analysis extension of TIMITBenchMarker.
+
+    Outputs:
+        analysis_dir/
+            sample_metrics.csv
+            summary.json
+            figures/
+                sample_wbe_histogram.png
+                boundary_error_histogram.png
+                sample_wbe_ecdf.png
+                worst_samples.png
+                wbe_vs_entropy.png
+            alignments/
+                <worst-sample alignment figures>
+    """
+
+    def __init__(
+        self,
+        root_dir: str | Path,
+        ref_audio_sr: int,
+        hyp_audio_sr: int,
+        hyp_hop_length: int,
+        input_maker: AlignerInputMaker,
+        analysis_dir: str | Path,
+        hyp_ignore_symbols: set[str] | None = None,
+        max_ref_words_per_hyp_word: int = 5,
+        seed: int = 42,
+    ):
+        super().__init__(
+            root_dir=root_dir,
+            ref_audio_sr=ref_audio_sr,
+            hyp_audio_sr=hyp_audio_sr,
+            hyp_hop_length=hyp_hop_length,
+            input_maker=input_maker,
+            hyp_ignore_symbols=hyp_ignore_symbols,
+            max_ref_words_per_hyp_word=max_ref_words_per_hyp_word,
+            seed=seed,
+        )
+
+        self.analysis_dir = Path(analysis_dir)
+        self.figure_dir = self.analysis_dir / "figures"
+        self.alignment_dir = self.analysis_dir / "alignments"
+
+        self.analysis_dir.mkdir(parents=True, exist_ok=True)
+        self.figure_dir.mkdir(parents=True, exist_ok=True)
+        self.alignment_dir.mkdir(parents=True, exist_ok=True)
+
+    @torch.no_grad()
+    def analyze(
+        self,
+        aligner: NDAligner,
+        vocoder: Generator | None = None,
+        max_test_samples: int | None = None,
+        top_k_alignments: int = 30,
+        compute_entropy: bool = True,
+        compute_mcd_dtw: bool = False,
+    ) -> list[TIMITAnalysisRow]:
+        """
+        Run sample-level error analysis.
+
+        Args:
+            aligner:
+                Trained ND-Aligner.
+
+            vocoder:
+                Required only when compute_mcd_dtw=True.
+
+            max_test_samples:
+                Optional limit on the number of TIMIT samples.
+
+            top_k_alignments:
+                Number of worst-WBE samples for which alignment figures
+                are generated.
+
+            compute_entropy:
+                Compute posterior entropy. This requires soft alignment.
+
+            compute_mcd_dtw:
+                Compute reconstruction MCD-DTW. This is relatively expensive
+                and requires vocoder.
+
+        Returns:
+            Rows sorted by descending sample-level mean WBE.
+        """
+        if compute_mcd_dtw and vocoder is None:
+            raise ValueError("compute_mcd_dtw=True requires a vocoder.")
+
+        was_aligner_training = aligner.training
+        was_input_maker_training = self.input_maker.training
+        was_vocoder_training = vocoder.training if vocoder is not None else None
+
+        device = next(aligner.parameters()).device
+        self.input_maker.to(device=device)
+
+        triplets = self.triplets if max_test_samples is None else self.triplets[:max_test_samples]
+
+        rows: list[TIMITAnalysisRow] = []
+        all_boundary_errors_ms: list[float] = []
+
+        try:
+            aligner.eval()
+            self.input_maker.eval()
+
+            if vocoder is not None:
+                vocoder.eval()
+
+            run_test_metrics = compute_entropy or compute_mcd_dtw
+            analysis_vocoder = vocoder if compute_mcd_dtw else None
+
+            for wrd_path, wav_path, txt_path in tqdm(
+                triplets,
+                desc="Analyzing TIMIT errors",
+                total=len(triplets),
+            ):
+                result = super().run_one(
+                    txt_path=txt_path,
+                    wrd_path=wrd_path,
+                    wav_path=wav_path,
+                    aligner=aligner,
+                    vocoder=analysis_vocoder,
+                    save_align_figure=False,
+                    align_figure_dir=None,
+                    is_test=run_test_metrics,
+                )
+
+                boundary_errors_ms = [
+                    float(error_sec) * 1000.0 for error_sec in result.boundary_errors
+                ]
+
+                if not boundary_errors_ms:
+                    continue
+
+                error_tensor = torch.tensor(
+                    boundary_errors_ms,
+                    dtype=torch.float32,
+                )
+
+                all_boundary_errors_ms.extend(boundary_errors_ms)
+
+                row = TIMITAnalysisRow(
+                    sample_id=self._make_sample_id(wav_path),
+                    wav_path=str(wav_path),
+                    txt_path=str(txt_path),
+                    wrd_path=str(wrd_path),
+                    text=self._read_txt(txt_path),
+                    num_boundaries=len(boundary_errors_ms),
+                    mean_wbe_ms=error_tensor.mean().item(),
+                    median_wbe_ms=error_tensor.median().item(),
+                    p90_wbe_ms=torch.quantile(
+                        error_tensor,
+                        0.90,
+                    ).item(),
+                    p95_wbe_ms=torch.quantile(
+                        error_tensor,
+                        0.95,
+                    ).item(),
+                    max_wbe_ms=error_tensor.max().item(),
+                    p_10ms=((error_tensor <= 10.0).float().mean().item() * 100.0),
+                    p_25ms=((error_tensor <= 25.0).float().mean().item() * 100.0),
+                    p_50ms=((error_tensor <= 50.0).float().mean().item() * 100.0),
+                    p_100ms=((error_tensor <= 100.0).float().mean().item() * 100.0),
+                    posterior_entropy=result.posterior_entropy,
+                    mcd_dtw=result.mcd_dtw,
+                )
+                rows.append(row)
+
+            rows.sort(
+                key=lambda row: row.mean_wbe_ms,
+                reverse=True,
+            )
+
+            self._save_sample_csv(rows)
+            self._save_analysis_summary(
+                rows=rows,
+                all_boundary_errors_ms=all_boundary_errors_ms,
+            )
+            self._save_analysis_figures(
+                rows=rows,
+                all_boundary_errors_ms=all_boundary_errors_ms,
+            )
+
+            self._save_worst_alignment_figures(
+                rows=rows,
+                aligner=aligner,
+                top_k=top_k_alignments,
+                compute_soft_path=compute_entropy,
+            )
+
+            return rows
+
+        finally:
+            if was_aligner_training:
+                aligner.train()
+
+            if was_input_maker_training:
+                self.input_maker.train()
+
+            if vocoder is not None and was_vocoder_training:
+                vocoder.train()
+
+    def _make_sample_id(self, wav_path: Path) -> str:
+        try:
+            relative_path = wav_path.relative_to(self.root_dir).with_suffix("")
+            return relative_path.as_posix().replace("/", "__")
+        except ValueError:
+            return wav_path.stem
+
+    def _save_sample_csv(
+        self,
+        rows: list[TIMITAnalysisRow],
+    ) -> None:
+        save_path = self.analysis_dir / "sample_metrics.csv"
+
+        if not rows:
+            save_path.write_text("", encoding="utf-8")
+            return
+
+        fieldnames = list(asdict(rows[0]).keys())
+
+        with open(
+            save_path,
+            "w",
+            encoding="utf-8",
+            newline="",
+        ) as file:
+            writer = csv.DictWriter(
+                file,
+                fieldnames=fieldnames,
+            )
+            writer.writeheader()
+
+            for row in rows:
+                writer.writerow(asdict(row))
+
+    def _save_analysis_summary(
+        self,
+        rows: list[TIMITAnalysisRow],
+        all_boundary_errors_ms: list[float],
+    ) -> None:
+        save_path = self.analysis_dir / "summary.json"
+
+        if not rows or not all_boundary_errors_ms:
+            summary = {
+                "num_samples": 0,
+                "num_boundaries": 0,
+            }
+        else:
+            sample_wbe = torch.tensor(
+                [row.mean_wbe_ms for row in rows],
+                dtype=torch.float32,
+            )
+            boundary_wbe = torch.tensor(
+                all_boundary_errors_ms,
+                dtype=torch.float32,
+            )
+
+            summary = {
+                "num_samples": len(rows),
+                "num_boundaries": len(all_boundary_errors_ms),
+                "sample_mean_wbe_ms": sample_wbe.mean().item(),
+                "sample_median_wbe_ms": sample_wbe.median().item(),
+                "sample_p90_wbe_ms": torch.quantile(
+                    sample_wbe,
+                    0.90,
+                ).item(),
+                "sample_p95_wbe_ms": torch.quantile(
+                    sample_wbe,
+                    0.95,
+                ).item(),
+                "sample_max_wbe_ms": sample_wbe.max().item(),
+                "boundary_mean_wbe_ms": boundary_wbe.mean().item(),
+                "boundary_median_wbe_ms": boundary_wbe.median().item(),
+                "boundary_p90_wbe_ms": torch.quantile(
+                    boundary_wbe,
+                    0.90,
+                ).item(),
+                "boundary_p95_wbe_ms": torch.quantile(
+                    boundary_wbe,
+                    0.95,
+                ).item(),
+                "boundary_max_wbe_ms": boundary_wbe.max().item(),
+                "p_10ms": ((boundary_wbe <= 10.0).float().mean().item() * 100.0),
+                "p_25ms": ((boundary_wbe <= 25.0).float().mean().item() * 100.0),
+                "p_50ms": ((boundary_wbe <= 50.0).float().mean().item() * 100.0),
+                "p_100ms": ((boundary_wbe <= 100.0).float().mean().item() * 100.0),
+            }
+
+        with open(
+            save_path,
+            "w",
+            encoding="utf-8",
+        ) as file:
+            json.dump(
+                summary,
+                file,
+                indent=2,
+                ensure_ascii=False,
+            )
+
+    def _save_analysis_figures(
+        self,
+        rows: list[TIMITAnalysisRow],
+        all_boundary_errors_ms: list[float],
+    ) -> None:
+        if not rows:
+            return
+
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+
+        sample_wbe = torch.tensor(
+            [row.mean_wbe_ms for row in rows],
+            dtype=torch.float32,
+        )
+
+        # --------------------------------------------------------------
+        # Sample-level WBE histogram
+        # --------------------------------------------------------------
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.hist(
+            sample_wbe.numpy(),
+            bins=40,
+        )
+        ax.axvline(
+            sample_wbe.mean().item(),
+            linestyle="--",
+            label=f"Mean: {sample_wbe.mean().item():.2f} ms",
+        )
+        ax.axvline(
+            sample_wbe.median().item(),
+            linestyle=":",
+            label=f"Median: {sample_wbe.median().item():.2f} ms",
+        )
+        ax.set_title("Sample-level mean WBE distribution")
+        ax.set_xlabel("Mean WBE per sample (ms)")
+        ax.set_ylabel("Number of samples")
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(
+            self.figure_dir / "sample_wbe_histogram.png",
+            dpi=200,
+        )
+        plt.close(fig)
+
+        # --------------------------------------------------------------
+        # Boundary-level error histogram
+        # --------------------------------------------------------------
+        if all_boundary_errors_ms:
+            boundary_errors = torch.tensor(
+                all_boundary_errors_ms,
+                dtype=torch.float32,
+            )
+
+            # Extremely large outliers can make the histogram unreadable.
+            x_max = torch.quantile(
+                boundary_errors,
+                0.99,
+            ).item()
+
+            clipped = boundary_errors[boundary_errors <= x_max]
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            ax.hist(
+                clipped.numpy(),
+                bins=60,
+            )
+            ax.axvline(10.0, linestyle="--", label="10 ms")
+            ax.axvline(25.0, linestyle="--", label="25 ms")
+            ax.axvline(50.0, linestyle="--", label="50 ms")
+            ax.axvline(100.0, linestyle="--", label="100 ms")
+            ax.set_title("Boundary-error distribution " + "(up to the 99th percentile)")
+            ax.set_xlabel("Absolute boundary error (ms)")
+            ax.set_ylabel("Number of boundaries")
+            ax.legend()
+            fig.tight_layout()
+            fig.savefig(
+                self.figure_dir / "boundary_error_histogram.png",
+                dpi=200,
+            )
+            plt.close(fig)
+
+        # --------------------------------------------------------------
+        # Sample-level ECDF
+        # --------------------------------------------------------------
+        sorted_wbe = torch.sort(sample_wbe).values
+        cumulative = torch.arange(
+            1,
+            len(sorted_wbe) + 1,
+            dtype=torch.float32,
+        ) / len(sorted_wbe)
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(
+            sorted_wbe.numpy(),
+            cumulative.numpy() * 100.0,
+        )
+        ax.axvline(25.0, linestyle="--", label="25 ms")
+        ax.axvline(50.0, linestyle="--", label="50 ms")
+        ax.set_title("Sample-level WBE empirical CDF")
+        ax.set_xlabel("Mean WBE per sample (ms)")
+        ax.set_ylabel("Samples at or below threshold (%)")
+        ax.set_ylim(0.0, 100.0)
+        ax.legend()
+        fig.tight_layout()
+        fig.savefig(
+            self.figure_dir / "sample_wbe_ecdf.png",
+            dpi=200,
+        )
+        plt.close(fig)
+
+        # --------------------------------------------------------------
+        # Worst samples
+        # --------------------------------------------------------------
+        worst_rows = rows[: min(30, len(rows))]
+        labels = [row.sample_id for row in reversed(worst_rows)]
+        values = [row.mean_wbe_ms for row in reversed(worst_rows)]
+
+        fig_height = max(7.0, 0.35 * len(worst_rows))
+        fig, ax = plt.subplots(
+            figsize=(12, fig_height),
+        )
+        ax.barh(labels, values)
+        ax.set_title("Worst samples by mean WBE")
+        ax.set_xlabel("Mean WBE (ms)")
+        ax.set_ylabel("Sample")
+        ax.tick_params(axis="y", labelsize=7)
+        fig.tight_layout()
+        fig.savefig(
+            self.figure_dir / "worst_samples.png",
+            dpi=200,
+        )
+        plt.close(fig)
+
+        # --------------------------------------------------------------
+        # WBE versus posterior entropy
+        # --------------------------------------------------------------
+        entropy_rows = [
+            row
+            for row in rows
+            if row.posterior_entropy is not None and math.isfinite(row.posterior_entropy)
+        ]
+
+        if entropy_rows:
+            fig, ax = plt.subplots(figsize=(8, 7))
+            ax.scatter(
+                [row.posterior_entropy for row in entropy_rows],
+                [row.mean_wbe_ms for row in entropy_rows],
+                alpha=0.65,
+            )
+            ax.set_title("Posterior entropy versus sample WBE")
+            ax.set_xlabel("Posterior entropy")
+            ax.set_ylabel("Mean WBE (ms)")
+            fig.tight_layout()
+            fig.savefig(
+                self.figure_dir / "wbe_vs_entropy.png",
+                dpi=200,
+            )
+            plt.close(fig)
+
+    @torch.no_grad()
+    def _save_worst_alignment_figures(
+        self,
+        rows: list[TIMITAnalysisRow],
+        aligner: NDAligner,
+        top_k: int,
+        compute_soft_path: bool,
+    ) -> None:
+        if top_k <= 0:
+            return
+
+        worst_rows = rows[: min(top_k, len(rows))]
+
+        for rank, row in enumerate(
+            tqdm(
+                worst_rows,
+                desc="Saving worst alignments",
+            ),
+            start=1,
+        ):
+            rank_dir = self.alignment_dir / f"rank_{rank:03d}_wbe_{row.mean_wbe_ms:.2f}ms"
+
+            super().run_one(
+                txt_path=Path(row.txt_path),
+                wrd_path=Path(row.wrd_path),
+                wav_path=Path(row.wav_path),
+                aligner=aligner,
+                vocoder=None,
+                save_align_figure=True,
+                align_figure_dir=rank_dir,
+                is_test=compute_soft_path,
+            )

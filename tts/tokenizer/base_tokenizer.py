@@ -77,10 +77,10 @@ class BaseTokenizer(ABC):
 
         Example:
             IPA tokenizer:
-                "Please call Stella." -> "<BOS> pliːz ... <EOS>"
+                "Please call Stella." -> "<sp> pliːz ... <sp>"
 
             FastSpeech2 tokenizer:
-                "Please call Stella." -> "{<BOS> P L IY1 Z ... <EOS>}"
+                "Please call Stella." -> "{<sp> P L IY1 Z ... <sp>}"
         """
         raise NotImplementedError()
 
