@@ -7,10 +7,14 @@ requires-python = ">=3.13,<3.14"
 authors = [{ name = "Suseong Kim", email = "blue29591@postech.ac.kr" }]
 classifiers = ["Private :: Do Not Upload"]
 dependencies = [
+  "cython>=3.2.4",
   "dacite>=1.9.2",
   "einops>=0.8.2",
+  "fastdtw>=0.3.4",
+  "g2p-en>=2.1.0",
   "glob2>=0.7",
   "huggingface-hub<1.0",
+  "inflect>=7.5.0",
   "ipykernel>=7.2.0",
   "librosa>=0.11.0",
   "matplotlib>=3.10.8",
@@ -21,15 +25,22 @@ dependencies = [
   "onnxscript>=0.6.2",
   "pandas>=3.0.1",
   "phonemizer>=3.3.0",
+  "praatio>=6.2.2",
+  "pysptk>=1.0.1",
   "pytest>=9.0.2",
+  "pyworld>=0.3.5",
+  "resemblyzer>=0.1.4",
   "scipy>=1.17.1",
   "silero-vad>=6.2.1",
   "soundfile>=0.13.1",
   "speechbrain>=1.0.0",
   "tensorboard>=2.20.0",
+  "tgt>=1.5",
   "torch>=2.10.0",
   "torchaudio>=2.10.0",
   "tqdm>=4.66.5",
+  "umap-learn>=0.5.12",
+  "unidecode>=1.4.0",
 ]
 
 [dependency-groups]

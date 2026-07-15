@@ -8,9 +8,9 @@ import torch
 from tqdm import tqdm
 
 from tts.config.utils.io import load_config
-from tts.models.modules.spk_encoder import SpeakerEncoder
+from tts.models.modules.spk_encoder import ECAPASpeakerEncoder, ResemblyzerSpeakerEncoder
 
-from .config import PreprocessConfig
+from ..config.preprocess.preprocess_config import PreprocessConfigs
 
 
 def parse_args():
@@ -24,17 +24,20 @@ def main(args: Any):
     # Load global data config
     if args.config:
         print(f"📖 Loading data config from: {args.config}")
-        preprocess_config = load_config(args.config, PreprocessConfig)
+        preprocess_config = load_config(args.config, PreprocessConfigs)
     else:
-        preprocess_config = PreprocessConfig()
+        preprocess_config = PreprocessConfigs()
 
-    print(">>> Initializing SpeakerEncoder (ECAPA-TDNN)...")
+    spk_encoder_type = preprocess_config.spk_encoder_type
+    print(f">>> Initializing SpeakerEncoder ({spk_encoder_type.upper()})...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    try:
-        speaker_encoder = SpeakerEncoder(device=device)
-    except Exception as e:
-        print(f"Error loading SpeakerEncoder: {e}. Cannot proceed without a valid model.")
-        return  # Exit if model cannot be loaded
+
+    if spk_encoder_type == "ecapa-tdnn":
+        speaker_encoder = ECAPASpeakerEncoder(device=device)
+    elif spk_encoder_type == "resemblyzer":
+        speaker_encoder = ResemblyzerSpeakerEncoder(device=device)
+    else:
+        raise RuntimeError(f"Invalid Speaker Encoder Type for {spk_encoder_type}")
 
     print(f">>> Extracting speaker embeddings from: {preprocess_config.preprocessed_dir}")
 
@@ -51,7 +54,7 @@ def main(args: Any):
     for wav_path in tqdm(wav_paths, desc="Extracting Speaker Embeddings"):
         # Save as {wav_name}_spk.pt in the same folder as the wav file
         base_path, _ = os.path.splitext(wav_path)
-        output_path = f"{base_path}_spk.pt"
+        output_path = f"{base_path}_{preprocess_config.spk_encoder_type}_spk.pt"
 
         try:
             # Load with librosa and force 16kHz (SpeakerEncoder target)

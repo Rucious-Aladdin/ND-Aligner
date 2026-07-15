@@ -1,0 +1,2 @@
+1. local-support-normalization이 제거됨
+2. 그에따라 R-variation 실험은 완전히 사라짐

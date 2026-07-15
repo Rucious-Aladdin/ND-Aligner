@@ -9,8 +9,8 @@ from torch.utils.data import DataLoader
 
 from tts.config.utils.io import save_config
 from tts.logger.tensorboard_logger import TensorboardLogger
-from tts.models.base_model import BaseModel
-from tts.utils.checkpoint_manager import CheckpointManager
+from tts.models.utils.base_model import BaseModel
+from tts.train.utils.checkpoint_manager import CheckpointManager
 
 T_DataConfig = TypeVar("T_DataConfig")
 T_ModelConfig = TypeVar("T_ModelConfig")
@@ -27,25 +27,353 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
 
         print("\n" + "🛠️  Initializing Trainer ".center(90, "="))
 
-        # 1. Setup Run Directory & Config Backup
         self.run_dir = self._setup_run_dir()
-
-        # 2. Setup Components
         self.logger = self._init_logger()
         self.ckpt_manager = self._init_ckpt_manager()
 
-        # 3. Training State (initialized in run)
-        self.model: BaseModel = None  # type: ignore
-        self.optimizer: torch.optim.Optimizer = None  # type: ignore
+        self.model: BaseModel | None = None
+        self.optimizer: torch.optim.Optimizer | None = None
         self.scheduler: torch.optim.lr_scheduler.LRScheduler | None = None
         self.scaler: torch.amp.GradScaler | None = None  # pyright: ignore[reportPrivateImportUsage]
 
         self.global_step = 0
         self.start_epoch = 1
 
-        # 4. Data Loaders (initialized in run)
-        self.train_loader: DataLoader = None  # type: ignore
-        self.valid_loader: DataLoader = None  # type: ignore
+        self.train_loader: DataLoader[Any] | None = None
+        self.valid_loader: DataLoader[Any] | None = None
+
+    ## Essential Abstract Methods #
+
+    @abstractmethod
+    def setup_model(
+        self,
+    ) -> tuple[
+        BaseModel,
+        torch.optim.Optimizer,
+        torch.optim.lr_scheduler.LRScheduler | None,
+    ]:
+        """Returns (model, optimizer, scheduler)."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def setup_dataloader(self) -> tuple[DataLoader[Any], DataLoader[Any]]:
+        """Returns (train_loader, valid_loader)."""
+        raise NotImplementedError()
+
+    @abstractmethod
+    def train_step(
+        self,
+        batch: Any,
+        epoch: int,
+        step: int,
+    ) -> tuple[torch.Tensor, Any, Any]:
+        """
+        Processes one training batch and returns:
+        (weighted_total_loss, metrics, model_output)
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def validation_step(
+        self,
+        batch: Any,
+        epoch: int,
+        step: int,
+    ) -> tuple[float, Any, Any]:
+        """
+        Processes one validation batch and returns:
+        (weighted_val_loss, metrics, model_output)
+        """
+        raise NotImplementedError()
+
+    ## Optional Hooks ##
+
+    def on_fit_start(self):
+        """Optional subclass hook called at the very start of run()."""
+        pass
+
+    def on_train_epoch_start(
+        self,
+        epoch: int,
+    ):
+        """Optional subclass hook called before iterating over the train loader."""
+        pass
+
+    def on_train_step_end(
+        self,
+        batch: Any,
+        epoch: int,
+        step: int,
+        is_step_boundary: bool,
+        weighted_loss: float,
+        metrics: Any,
+        output: Any,
+    ):
+        """Optional subclass hook for train logging/visualization."""
+        pass
+
+    def on_valid_epoch_end(
+        self,
+        epoch: int,
+        step: int,
+        avg_val_loss: float,
+        avg_metrics: Any,
+        last_batch: Any,
+        last_output: Any,
+    ):
+        """Optional subclass hook for validation logging/visualization."""
+        pass
+
+    def on_training_end(
+        self,
+        epoch: int,
+        step: int,
+    ):
+        """Optional subclass hook for end-of-the-all-training."""
+        pass
+
+    ## RUN!! ##
+
+    def run(self):
+        print(f"🚀  Using Device: [ {self.device} ]")
+
+        # Setup Core Components
+        self.model, self.optimizer, self.scheduler = self.setup_model()
+        self.train_loader, self.valid_loader = self.setup_dataloader()
+
+        assert isinstance(self.model, BaseModel), "setup_model() must return a BaseModel instance"
+        assert self.optimizer is not None, "setup_model() must initialize self.optimizer"
+        assert self.train_loader is not None, "setup_dataloader() must initialize self.train_loader"
+        assert self.valid_loader is not None, "setup_dataloader() must initialize self.valid_loader"
+
+        # Checkpoint
+        self.load_checkpoint()
+
+        # On Fit Start Hook
+        self.on_fit_start()
+
+        if self.train_cfg.fp16_run and self.device.type == "cuda":
+            print("⚡  AMP (Automatic Mixed Precision) Enabled.")
+            self.scaler = torch.amp.GradScaler("cuda")  # pyright: ignore[reportPrivateImportUsage]
+
+        if self.train_cfg.val_sanity_check:
+            self._run_validation_sanity_check(self.global_step)
+            print("✅  Sanity check passed.")
+
+        print(f"🔥  Starting training for {self.train_cfg.max_epochs} epochs...")
+        self.optimizer.zero_grad(set_to_none=True)
+
+        for epoch in range(self.start_epoch, self.train_cfg.max_epochs + 1):
+            start_time = time.time()
+
+            avg_train_loss = self.train_epoch(epoch)
+
+            if epoch % self.train_cfg.val_interval == 0:
+                val_loss, val_metrics = self.valid_epoch(epoch, self.global_step)
+
+                epoch_time = time.time() - start_time
+                print("-" * 90)
+                print(
+                    f"🌟  Epoch {epoch} Summary ({epoch_time:.2f}s) | "
+                    + f"Avg Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss:.4f}"
+                )
+                print("-" * 90)
+
+                self.ckpt_manager.save(
+                    model=self.model,
+                    optimizer=self.optimizer,
+                    scheduler=self.scheduler,
+                    step=self.global_step,
+                    epoch=epoch,
+                    loss_values=val_metrics,
+                    save_periodic=False,
+                    save_best_step=False,
+                    save_best_epoch=True,
+                )
+
+        self.on_training_end(
+            epoch=epoch,
+            step=self.global_step,
+        )
+
+        if self.logger:
+            self.logger.close()
+
+    def load_checkpoint(self):
+        assert self.optimizer is not None
+        assert self.model is not None
+
+        if self.train_cfg.continue_path and os.path.exists(self.train_cfg.continue_path):
+            print(f"📥  Loading checkpoint: {self.train_cfg.continue_path}")
+            self.model.load_checkpoint(self.train_cfg.continue_path, device=self.device)
+
+            ckpt = torch.load(self.train_cfg.continue_path, map_location=self.device)
+            if "optimizer" in ckpt and not self.train_cfg.reset_optimizer:
+                print("   - Optimizer state restored.")
+                self.optimizer.load_state_dict(ckpt["optimizer"])
+            if (
+                "scheduler" in ckpt
+                and self.scheduler is not None
+                and not self.train_cfg.reset_scheduler
+            ):
+                print("   - Scheduler state restored.")
+                self.scheduler.load_state_dict(ckpt["scheduler"])
+            if "step" in ckpt:
+                self.global_step = ckpt["step"]
+            if "epoch" in ckpt:
+                self.start_epoch = ckpt["epoch"] + 1
+            print(f"✅  Resuming from Step: {self.global_step} | Epoch: {self.start_epoch}")
+
+    ## General Training Methods ##
+
+    def train_epoch(self, epoch: int) -> float:
+        assert self.optimizer is not None
+        assert self.model is not None
+        assert self.train_loader is not None
+
+        self.on_train_epoch_start(epoch)
+
+        self.model.train()
+        num_batches = len(self.train_loader)
+        epoch_train_loss = 0.0
+
+        mini_batch_step = 0
+
+        for step_in_epoch, batch in enumerate(self.train_loader, 1):
+            mini_batch_step += 1
+            batch = self.move_batch_to_device(batch)
+
+            is_step_boundary = (mini_batch_step % self.train_cfg.grad_accumulation_steps == 0) or (
+                step_in_epoch == num_batches
+            )
+
+            if is_step_boundary:
+                self.global_step += 1
+
+            loss, metrics, output = self._train_one_step(
+                batch,
+                epoch,
+                self.global_step,
+                is_step_boundary,
+            )
+            epoch_train_loss += loss
+
+            self.on_train_step_end(
+                batch=batch,
+                epoch=epoch,
+                step=self.global_step,
+                is_step_boundary=is_step_boundary,
+                weighted_loss=loss,
+                metrics=metrics,
+                output=output,
+            )
+
+            del output
+            del batch
+
+            if is_step_boundary:
+                if self.global_step % self.train_cfg.save_interval == 0:
+                    self.ckpt_manager.save(
+                        model=self.model,
+                        optimizer=self.optimizer,
+                        scheduler=self.scheduler,
+                        step=self.global_step,
+                        epoch=epoch,
+                        save_periodic=True,
+                        save_best_step=False,
+                        save_best_epoch=False,
+                    )
+
+                if (
+                    self.train_cfg.val_interval_step > 0
+                    and self.global_step % self.train_cfg.val_interval_step == 0
+                ):
+                    print(f"🔍  [Step {self.global_step}] Running step-based validation...")
+
+                    val_loss, val_metrics = self.valid_epoch(
+                        epoch,
+                        self.global_step,
+                        skip_epoch_end_hook=self.train_cfg.val_interval_step_skip_hook,
+                    )
+
+                    print(f"🌟  Step {self.global_step} Validation | Val Loss: {val_loss:.4f}")
+
+                    self.ckpt_manager.save(
+                        model=self.model,
+                        optimizer=self.optimizer,
+                        scheduler=self.scheduler,
+                        step=self.global_step,
+                        epoch=epoch,
+                        loss_values=val_metrics,
+                        save_periodic=False,
+                        save_best_step=True,
+                        save_best_epoch=False,
+                    )
+
+                    self.model.train()
+
+        return epoch_train_loss / num_batches
+
+    @torch.no_grad()
+    def valid_epoch(
+        self,
+        epoch: int,
+        step: int,
+        skip_epoch_end_hook: bool = False,
+    ) -> tuple[float, Any]:
+        assert self.model is not None
+        assert self.valid_loader is not None
+
+        self.model.eval()
+
+        total_val_loss = 0.0
+        acc_metrics: dict[str, float] | None = None
+        metrics_template: Any = None
+        num_processed = 0
+
+        last_batch = None
+        last_output = None
+
+        for batch in self.valid_loader:
+            batch = self.move_batch_to_device(batch)
+            with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
+                weighted_val_loss, metrics, output = self.validation_step(
+                    batch,
+                    epoch=epoch,
+                    step=step,
+                )
+
+            metric_values = self._metric_to_dict(metrics)
+            if acc_metrics is None:
+                acc_metrics = {k: 0.0 for k in metric_values}
+                metrics_template = metrics
+
+            total_val_loss += weighted_val_loss
+            for k, v in metric_values.items():
+                acc_metrics[k] += v
+
+            num_processed += 1
+            last_batch, last_output = batch, output
+
+        if num_processed == 0 or acc_metrics is None or metrics_template is None:
+            raise ValueError("Validation loader is empty.")
+
+        avg_val_loss = total_val_loss / num_processed
+        avg_metrics_dict = {k: v / num_processed for k, v in acc_metrics.items()}
+        avg_metrics = self._dict_to_metric(metrics_template, avg_metrics_dict)
+
+        if not skip_epoch_end_hook:
+            self.on_valid_epoch_end(
+                epoch=epoch,
+                step=step,
+                avg_val_loss=avg_val_loss,
+                avg_metrics=avg_metrics,
+                last_batch=last_batch,
+                last_output=last_output,
+            )
+        return avg_val_loss, avg_metrics
+
+    ## Initialization Helpers ##
 
     def _setup_run_dir(self) -> str:
         if self.train_cfg.continue_dir:
@@ -73,96 +401,28 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
     def _init_ckpt_manager(self) -> CheckpointManager:
         return CheckpointManager(
             checkpoint_dir=os.path.join(self.run_dir, "checkpoints"),
-            keep_best_count=self.train_cfg.keep_best_count,
+            keep_best_epoch_count=self.train_cfg.keep_best_count,
+            keep_best_step_count=self.train_cfg.keep_best_count,
             keep_last_count=self.train_cfg.keep_last_count,
             monitor_loss=self.train_cfg.monitor_loss,
         )
 
-    @abstractmethod
-    def setup_model(
-        self,
-    ) -> tuple[
-        BaseModel,
-        torch.optim.Optimizer,
-        torch.optim.lr_scheduler.LRScheduler | None,
-    ]:
-        """Returns (model, optimizer, scheduler)."""
-        pass
-
-    @abstractmethod
-    def setup_dataloader(self) -> tuple[DataLoader[Any], DataLoader[Any]]:
-        """Returns (train_loader, valid_loader)."""
-        pass
-
-    @abstractmethod
-    def train_step(self, batch: Any, step: int) -> tuple[torch.Tensor, Any, Any]:
-        """
-        Processes one training batch and returns:
-        (weighted_total_loss, metrics, model_output)
-        """
-        pass
-
-    @abstractmethod
-    def validation_step(self, batch: Any, step: int) -> tuple[float, Any, Any]:
-        """
-        Processes one validation batch and returns:
-        (weighted_val_loss, metrics, model_output)
-        """
-        pass
-
-    def on_train_step_end(
-        self,
-        batch: Any,
-        step: int,
-        is_step_boundary: bool,
-        weighted_loss: float,
-        metrics: Any,
-        output: Any,
-    ):
-        """Optional subclass hook for train logging/visualization."""
-        pass
-
-    def on_validation_epoch_end(
-        self,
-        step: int,
-        avg_val_loss: float,
-        avg_metrics: Any,
-        last_batch: Any,
-        last_output: Any,
-    ):
-        """Optional subclass hook for validation logging/visualization."""
-        pass
-
-    def load_checkpoint(self):
-        if self.train_cfg.continue_path and os.path.exists(self.train_cfg.continue_path):
-            print(f"📥  Loading checkpoint: {self.train_cfg.continue_path}")
-            self.model.load_checkpoint(self.train_cfg.continue_path, device=self.device)
-
-            ckpt = torch.load(self.train_cfg.continue_path, map_location=self.device)
-            if "optimizer" in ckpt and not self.train_cfg.reset_optimizer:
-                print("   - Optimizer state restored.")
-                self.optimizer.load_state_dict(ckpt["optimizer"])
-            if (
-                "scheduler" in ckpt
-                and self.scheduler is not None
-                and not self.train_cfg.reset_scheduler
-            ):
-                print("   - Scheduler state restored.")
-                self.scheduler.load_state_dict(ckpt["scheduler"])
-            if "step" in ckpt:
-                self.global_step = ckpt["step"]
-            if "epoch" in ckpt:
-                self.start_epoch = ckpt["epoch"] + 1
-            print(f"✅  Resuming from Step: {self.global_step} | Epoch: {self.start_epoch}")
+    ## Training Helpers ##
 
     def _train_one_step(
-        self, batch: Any, step: int, is_step_boundary: bool
+        self,
+        batch: Any,
+        epoch: int,
+        step: int,
+        is_step_boundary: bool,
     ) -> tuple[float, Any, Any]:
+        assert self.optimizer is not None
+        assert self.model is not None
+
         self.model.train()
-        # batch = self.move_batch_to_device(batch)
 
         with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
-            weighted_loss, metrics, output = self.train_step(batch, step)
+            weighted_loss, metrics, output = self.train_step(batch, epoch, step)
             scaled_loss = weighted_loss / self.train_cfg.grad_accumulation_steps
 
         if torch.isnan(scaled_loss):
@@ -180,7 +440,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
                 self.scaler.update()
                 if self.scheduler is not None:
                     self.scheduler.step()
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad(set_to_none=True)
         else:
             scaled_loss.backward()
             if is_step_boundary:
@@ -191,9 +451,11 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
                 self.optimizer.step()
                 if self.scheduler is not None:
                     self.scheduler.step()
-                self.optimizer.zero_grad()
+                self.optimizer.zero_grad(set_to_none=True)
 
         return weighted_loss.item(), metrics, output
+
+    ## Input Accumulation Methods ##
 
     def _metric_to_dict(self, metrics: Any) -> dict[str, float]:
         if hasattr(metrics, "_asdict"):
@@ -209,112 +471,40 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
             return values
         return values
 
-    def train_epoch(self, epoch: int) -> float:
-        self.model.train()
-        num_batches = len(self.train_loader)
-        epoch_train_loss = 0.0
-        mini_batch_step = 0
-
-        for step_in_epoch, batch in enumerate(self.train_loader, 1):
-            mini_batch_step += 1
-            batch = self.move_batch_to_device(batch)
-
-            is_step_boundary = (mini_batch_step % self.train_cfg.grad_accumulation_steps == 0) or (
-                step_in_epoch == num_batches
-            )
-
-            if is_step_boundary:
-                self.global_step += 1
-
-            loss, metrics, output = self._train_one_step(batch, self.global_step, is_step_boundary)
-            epoch_train_loss += loss
-
-            self.on_train_step_end(
-                batch=batch,
-                step=self.global_step,
-                is_step_boundary=is_step_boundary,
-                weighted_loss=loss,
-                metrics=metrics,
-                output=output,
-            )
-
-            if is_step_boundary and self.global_step % self.train_cfg.save_interval == 0:
-                self.ckpt_manager.save(
-                    self.model,
-                    self.optimizer,
-                    self.scheduler,
-                    self.global_step,
-                    epoch,
-                )
-
-        return epoch_train_loss / num_batches
-
-    @torch.no_grad()
-    def valid_epoch(self, step: int) -> tuple[float, Any]:
-        self.model.eval()
-
-        total_val_loss = 0.0
-        acc_metrics: dict[str, float] | None = None
-        metrics_template: Any = None
-        num_processed = 0
-
-        last_batch = None
-        last_output = None
-
-        for batch in self.valid_loader:
-            batch = self.move_batch_to_device(batch)
-            with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
-                weighted_val_loss, metrics, output = self.validation_step(batch, step)
-
-            metric_values = self._metric_to_dict(metrics)
-            if acc_metrics is None:
-                acc_metrics = {k: 0.0 for k in metric_values}
-                metrics_template = metrics
-
-            total_val_loss += weighted_val_loss
-            for k, v in metric_values.items():
-                acc_metrics[k] += v
-
-            num_processed += 1
-            last_batch, last_output = batch, output
-
-        if num_processed == 0 or acc_metrics is None or metrics_template is None:
-            raise ValueError("Validation loader is empty.")
-
-        avg_val_loss = total_val_loss / num_processed
-        avg_metrics_dict = {k: v / num_processed for k, v in acc_metrics.items()}
-        avg_metrics = self._dict_to_metric(metrics_template, avg_metrics_dict)
-
-        self.on_validation_epoch_end(
-            step=step,
-            avg_val_loss=avg_val_loss,
-            avg_metrics=avg_metrics,
-            last_batch=last_batch,
-            last_output=last_output,
-        )
-        return avg_val_loss, avg_metrics
+    ## Validataion Helpers ##
 
     @torch.no_grad()
     def _run_validation_sanity_check(self, step: int):
-        self.model.eval()
+        assert self.model is not None
+        assert self.valid_loader is not None
 
-        try:
-            batch = next(iter(self.valid_loader))
-        except StopIteration as e:
-            raise ValueError("Validation loader is empty.") from e
+        if self.train_cfg.val_sanity_check_full_epoch:
+            print("🔍  Running FULL epoch validation sanity check...")
+            self.valid_epoch(epoch=0, step=step)
+        else:
+            print("🔍  Running single-batch validation sanity check...")
+            self.model.eval()
 
-        batch = self.move_batch_to_device(batch)
+            try:
+                batch = next(iter(self.valid_loader))
+            except StopIteration as e:
+                raise ValueError("Validation loader is empty.") from e
 
-        with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
-            val_loss, val_metrics, output = self.validation_step(batch, step)
+            batch = self.move_batch_to_device(batch)
 
-        self.on_validation_epoch_end(
-            step=step,
-            avg_val_loss=val_loss,
-            avg_metrics=val_metrics,
-            last_batch=batch,
-            last_output=output,
-        )
+            with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
+                val_loss, val_metrics, output = self.validation_step(batch, epoch=0, step=step)
+
+            self.on_valid_epoch_end(
+                epoch=0,
+                step=step,
+                avg_val_loss=val_loss,
+                avg_metrics=val_metrics,
+                last_batch=batch,
+                last_output=output,
+            )
+
+    ## Device IO ##
 
     def move_batch_to_device(self, batch: Any) -> Any:
         return self._move_to_device(batch, self.device)
@@ -340,59 +530,3 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
             )
 
         return obj
-
-    def run(self):
-        print(f"🚀  Using Device: [ {self.device} ]")
-
-        # Setup Core Components
-        self.model, self.optimizer, self.scheduler = self.setup_model()
-        self.train_loader, self.valid_loader = self.setup_dataloader()
-
-        assert isinstance(self.model, BaseModel), "setup_model() must return a BaseModel instance"
-        assert self.optimizer is not None, "setup_model() must initialize self.optimizer"
-        assert self.train_loader is not None, "setup_dataloader() must initialize self.train_loader"
-        assert self.valid_loader is not None, "setup_dataloader() must initialize self.valid_loader"
-
-        # Checkpoint
-        self.load_checkpoint()
-
-        if self.train_cfg.fp16_run and self.device.type == "cuda":
-            print("⚡  AMP (Automatic Mixed Precision) Enabled.")
-            self.scaler = torch.amp.GradScaler("cuda")  # pyright: ignore[reportPrivateImportUsage]
-
-        if self.train_cfg.val_sanity_check:
-            print("🔍  Running validation sanity check...")
-            self._run_validation_sanity_check(self.global_step)
-            print("✅  Sanity check passed.")
-
-        print(f"🔥  Starting training for {self.train_cfg.max_epochs} epochs...")
-        self.optimizer.zero_grad()
-
-        for epoch in range(self.start_epoch, self.train_cfg.max_epochs + 1):
-            start_time = time.time()
-
-            avg_train_loss = self.train_epoch(epoch)
-
-            if epoch % self.train_cfg.val_interval == 0:
-                val_loss, val_metrics = self.valid_epoch(self.global_step)
-
-                epoch_time = time.time() - start_time
-                print("-" * 90)
-                print(
-                    f"🌟  Epoch {epoch} Summary ({epoch_time:.2f}s) | "
-                    + f"Avg Train Loss: {avg_train_loss:.4f} | Val Loss: {val_loss:.4f}"
-                )
-                print("-" * 90)
-
-                self.ckpt_manager.save(
-                    self.model,
-                    self.optimizer,
-                    self.scheduler,
-                    self.global_step,
-                    epoch,
-                    loss_values=val_metrics,
-                    is_best=True,
-                )
-
-        if self.logger:
-            self.logger.close()

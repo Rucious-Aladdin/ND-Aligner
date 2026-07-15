@@ -9,8 +9,6 @@ import torch.nn as nn
 import torch.nn.functional as F
 from librosa.filters import mel as librosa_mel_fn
 
-from tts.config.stage1.data_config import AudioConfig
-
 
 def dynamic_range_compression_torch(
     x: torch.Tensor,
@@ -21,23 +19,32 @@ def dynamic_range_compression_torch(
 
 
 class MelSpecExtractor(nn.Module):
-    def __init__(self, config: AudioConfig):
+    def __init__(
+        self,
+        sr: int,
+        n_mels: int,
+        n_fft: int,
+        hop_length: int,
+        win_length: int,
+        fmin: float,
+        fmax: float,
+    ):
         super().__init__()
-        self.n_fft = config.n_fft
-        self.hop_size = config.hop_length
-        self.win_size = config.win_length
-        self.fmin = config.f_min
-        self.fmax = config.f_max
+        self.n_fft = n_fft
+        self.hop_size = hop_length
+        self.win_length = win_length
+        self.fmin = fmin
+        self.fmax = fmax
 
         mel = librosa_mel_fn(
-            sr=config.sr,
+            sr=sr,
             n_fft=self.n_fft,
-            n_mels=config.n_mels,
+            n_mels=n_mels,
             fmin=self.fmin,
             fmax=self.fmax,
         )
         self.register_buffer("mel_basis", torch.from_numpy(mel).float())
-        self.register_buffer("hann_window", torch.hann_window(self.win_size))
+        self.register_buffer("hann_window", torch.hann_window(self.win_length))
         self.mel_basis: torch.Tensor
         self.hann_window: torch.Tensor
 
@@ -61,7 +68,7 @@ class MelSpecExtractor(nn.Module):
                 y,
                 self.n_fft,
                 hop_length=self.hop_size,
-                win_length=self.win_size,
+                win_length=self.win_length,
                 window=self.hann_window,
                 center=False,
                 pad_mode="reflect",
