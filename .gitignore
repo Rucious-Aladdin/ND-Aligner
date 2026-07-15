@@ -4,6 +4,9 @@ runs/
 ljspeech_runs/
 checkpoints/
 debug_outputs/
+results/
+exp_configs/
+output/
 
 # Python cache
 __pycache__/
