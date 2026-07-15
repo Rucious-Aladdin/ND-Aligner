@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 from ..layers.film_blocks import FiLMResidualBlock
+from ..layers.pos_encoding import PositionalEncoding1d
 
 
 class Decoder(nn.Module):
@@ -27,7 +28,7 @@ class Decoder(nn.Module):
             kernel_sizes = [3, 3, 3, 3]
 
         self.input_proj = nn.Conv1d(in_channels, hidden_channels, 1)
-
+        self.pe = PositionalEncoding1d(channels=hidden_channels)
         self.layers = nn.ModuleList()
         for i, kernel_size in enumerate(kernel_sizes):
             dilation = dilation_base**i
@@ -67,6 +68,7 @@ class Decoder(nn.Module):
             mask_conv = mask
 
         x = self.input_proj(x)
+        x = self.pe(x)
         if mask_conv is not None:
             x = x * mask_conv
 

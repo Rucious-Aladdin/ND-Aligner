@@ -18,7 +18,7 @@ N_MELS = 80
 HOP_LENGTH = 256
 N_FFT = 1024
 
-DATASETS = ["vctk", "libritts"]
+DATASETS = ["vctk"]  # , "libritts"]
 SEED = 42
 
 

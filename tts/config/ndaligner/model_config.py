@@ -12,11 +12,11 @@ from .data_config import (
     AudioConfigs,
 )
 
-SPEC_DIM = 256
-TEXT_DIM = 256
+SPEC_DIM = 128
+TEXT_DIM = 128
 
-SHARED_HIDDEN_DIM = 256
-DEC_HIDDEN_DIM = 256
+SHARED_HIDDEN_DIM = 192
+DEC_HIDDEN_DIM = 192
 
 USE_DELTA_FEAT = False
 USE_DELTA_DELTA_FEAT = False
@@ -52,7 +52,7 @@ class TextEncoderConfigs:
 class SpecEncoderConfigs:
     in_dim: int = field(default_factory=spec_indim)
     out_dim: int = SPEC_DIM
-    hidden_dim: int = 256
+    hidden_dim: int = 192
     cond_dim: int = field(default_factory=spk_dim)
 
     kernel_size: int = 3
@@ -72,7 +72,7 @@ class SpecDecoderConfigs:
     dilation_base: int = 1
     dropout: float = 0.15
 
-    coupling_cond_proj_dim: int = 192
+    coupling_cond_proj_dim: int = 128
     coupling_num_refine_steps: int = 6
     coupling_step_emb_dim: int = 64
     coupling_loss_decay_factor: float = 0.5

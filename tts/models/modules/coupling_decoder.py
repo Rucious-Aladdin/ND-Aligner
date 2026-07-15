@@ -4,6 +4,7 @@ import torch
 import torch.nn as nn
 
 from tts.models.layers.film_blocks import FiLMResidualBlock
+from tts.models.layers.pos_encoding import PositionalEncoding1d
 
 
 class CouplingDecoderOutput(NamedTuple):
@@ -217,12 +218,20 @@ class CouplingDecoder(nn.Module):
             nn.LayerNorm(cond_proj_dim),
         )
 
+        self.pe = PositionalEncoding1d(channels=hidden_channels)
+
         # step_idx = 0 for stem, 1..num_refinement_steps for refinement.
         self.step_emb = nn.Embedding(num_refinement_steps + 1, step_emb_dim)
 
+        self.in_proj = nn.Conv1d(
+            in_channels,
+            hidden_channels,
+            kernel_size=1,
+        )
+
         # RF=1 stem: in_channels -> hidden_channels.
         self.stem_refine = FiLMRefineBlock(
-            in_channels=in_channels,
+            in_channels=hidden_channels,
             out_channels=hidden_channels,
             hidden_channels=hidden_channels,
             cond_dim=self.refine_cond_dim,
@@ -364,7 +373,8 @@ class CouplingDecoder(nn.Module):
 
         # (B, T, C) -> (B, C, T)
         h = x.transpose(1, 2)
-
+        h = self.in_proj(h)
+        h = self.pe(h)
         if mask is not None:
             h = h * mask.unsqueeze(1).to(dtype=h.dtype)
 
