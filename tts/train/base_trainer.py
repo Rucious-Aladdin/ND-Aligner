@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from tts.config.utils.io import save_config
 from tts.logger.tensorboard_logger import TensorboardLogger
 from tts.models.utils.base_model import BaseModel
-from tts.utils.checkpoint_manager import CheckpointManager
+from tts.train.utils.checkpoint_manager import CheckpointManager
 
 T_DataConfig = TypeVar("T_DataConfig")
 T_ModelConfig = TypeVar("T_ModelConfig")

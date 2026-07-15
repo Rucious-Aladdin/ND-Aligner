@@ -9,21 +9,21 @@ from torch.utils.data import Dataset
 from tts.audio.linear_spectrogram import LinearSpecExtractor
 from tts.audio.mel_spectrogram import MelSpecExtractor
 from tts.config.ndaligner.data_config import DataConfig
-from tts.config.ndaligner.model_config import SPK_COND_DIM
 from tts.tokenizer.load_tokenizer import load_tokenizer
 
-from .data_types import TTSDatasetInstance, TTSItem
+from .data_types import TrainDatasetInstance, TrainItem
 
 
-class TTSDataset(Dataset[TTSDatasetInstance]):
+class TTSDataset(Dataset[TrainDatasetInstance]):
     def __init__(
         self,
-        items: list[TTSItem],
+        items: list[TrainItem],
         config: DataConfig,
     ):
         self.items = items
         self.cache_dir = config.dataset.data_cache_dir
         self.sr = config.audio.sr
+        self.spk_embedding_dim = config.preprocess.spk_embedding_dim
 
         if self.cache_dir:
             os.makedirs(self.cache_dir, exist_ok=True)
@@ -64,7 +64,7 @@ class TTSDataset(Dataset[TTSDatasetInstance]):
         return len(self.items)
 
     @override
-    def __getitem__(self, idx: int) -> TTSDatasetInstance:
+    def __getitem__(self, idx: int) -> TrainDatasetInstance:
         item = self.items[idx]
 
         # Use MD5 hash of audio path as unique identifier for caching.
@@ -76,7 +76,7 @@ class TTSDataset(Dataset[TTSDatasetInstance]):
             try:
                 x, y, y_recon, cond = torch.load(cache_path, weights_only=True)
 
-                return TTSDatasetInstance(
+                return TrainDatasetInstance(
                     text=x,
                     spec=y,
                     recon_spec=y_recon,
@@ -119,16 +119,22 @@ class TTSDataset(Dataset[TTSDatasetInstance]):
                 cond = torch.load(item.spk_path, weights_only=True).float()
             except Exception as e:
                 print(f"Error loading speaker embedding {item.spk_path}: {e}. Using zero vector.")
-                cond = torch.zeros(SPK_COND_DIM, dtype=torch.float32)
+                cond = torch.zeros(
+                    self.spk_embedding_dim,
+                    dtype=torch.float32,
+                )
         else:
-            cond = torch.zeros(SPK_COND_DIM, dtype=torch.float32)
+            cond = torch.zeros(
+                self.spk_embedding_dim,
+                dtype=torch.float32,
+            )
 
         data_to_cache = (x, y, y_recon, cond)
 
         if cache_path:
             torch.save(data_to_cache, cache_path)
 
-        return TTSDatasetInstance(
+        return TrainDatasetInstance(
             text=x,
             spec=y,
             recon_spec=y_recon,

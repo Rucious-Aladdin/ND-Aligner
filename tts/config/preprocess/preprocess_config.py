@@ -7,14 +7,28 @@ from tts.global_constant import DATA_PARENT_DIR, SAMPLE_RATE
 
 # Global root for datasets (base directory for preprocessed data)
 
+SPK_ENCODER_TYPE = "resemblyzer"
+
+
+def spk_dim() -> int:
+    if SPK_ENCODER_TYPE == "ecapa-tdnn":  # type: ignore
+        return 192
+    elif SPK_ENCODER_TYPE == "resemblyzer":
+        return 256
+    else:
+        raise ValueError()
+
 
 @dataclass(frozen=True)
 class PreprocessConfigs:
-    data_root_dir: str = os.path.join(DATA_PARENT_DIR, "LibriTTS", "train-clean-100")
+    data_root_dir: str = os.path.join(DATA_PARENT_DIR, "LibriTTS", "train-clean-360")
     preprocessed_dir: str = os.path.join(
-        DATA_PARENT_DIR, "LibriTTS-train-clean-100-preprocessed-trimmed"
+        DATA_PARENT_DIR,
+        "LibriTTS-preprocessed-trimmed",
+        "train-clean-360",
     )
-    spk_embedding_dim: int = 192  # ECAPA-TDNN output dimension
+    spk_encoder_type: str = SPK_ENCODER_TYPE
+    spk_embedding_dim: int = field(default_factory=spk_dim)
 
     resample_sr: int = SAMPLE_RATE
 

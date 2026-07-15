@@ -1,6 +1,6 @@
 from dataclasses import dataclass, field
 
-from tts.config.preprocess.preprocess_config import PreprocessConfigs
+from tts.config.preprocess.preprocess_config import PreprocessConfigs, spk_dim
 from tts.tokenizer.load_tokenizer import load_tokenizer
 
 from .data_config import (
@@ -14,7 +14,6 @@ from .data_config import (
 
 SPEC_DIM = 256
 TEXT_DIM = 256
-SPK_COND_DIM = 192  # ECAPA-TDNN
 
 SHARED_HIDDEN_DIM = 256
 DEC_HIDDEN_DIM = 256
@@ -42,22 +41,20 @@ def n_vocabs() -> int:
 
 @dataclass(frozen=True)
 class TextEncoderConfigs:
-    # common dimensions
     n_vocab: int = field(default_factory=n_vocabs)
     dim_out: int = TEXT_DIM
     dim_hidden: int = SHARED_HIDDEN_DIM
-    dim_cond: int = SPK_COND_DIM
+    dim_cond: int = field(default_factory=spk_dim)
     kernel_sizes: list[int] = field(default_factory=lambda: [1])
 
 
 @dataclass(frozen=True)
 class SpecEncoderConfigs:
-    # dimensions
     in_dim: int = field(default_factory=spec_indim)
-    hidden_dim: int = SPEC_DIM
-    cond_dim: int = SPK_COND_DIM
+    out_dim: int = SPEC_DIM
+    hidden_dim: int = 256
+    cond_dim: int = field(default_factory=spk_dim)
 
-    # architectures
     kernel_size: int = 3
     dropout_p: float = 0.15
     dilation_sizes: list[int] = field(default_factory=lambda: [1, 1, 1])
@@ -70,7 +67,7 @@ class SpecDecoderConfigs:
     in_channels: int = TEXT_DIM
     out_channels: int = N_MELS
     hidden_channels: int = DEC_HIDDEN_DIM
-    cond_dim: int = SPK_COND_DIM
+    cond_dim: int = field(default_factory=spk_dim)
     kernel_sizes: list[int] = field(default_factory=lambda: [3, 3, 3, 3])
     dilation_base: int = 1
     dropout: float = 0.15
@@ -87,7 +84,7 @@ class SpecDecoderConfigs:
 class CRFAlignerConfigs:
     dim_spec: int = SPEC_DIM
     dim_text: int = TEXT_DIM
-    dim_cond: int = SPK_COND_DIM
+    dim_cond: int = field(default_factory=spk_dim)
     dim_unary_latent: int = 128
     cond_channels: int = 32
 

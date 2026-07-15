@@ -4,7 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from tts.models.layers.film_layer import FiLMLayer
+from tts.models.layers.film_blocks import FiLMLayer, FiLMResidualBlock
+from tts.models.layers.pos_encoding import PositionalEncoding1d
 
 
 class Conv1dBlock(nn.Module):
@@ -81,24 +82,6 @@ class Conv1dBlock(nn.Module):
 
 
 class TextEncoder(nn.Module):
-    """
-    Conv text encoder.
-
-    Input:
-        text_token_ids : token ids, (B, T_text)
-        text_mask      : (B, T_text) or (B, 1, T_text)
-        cond           : optional conditioning vector, (B, D_cond)
-
-    Output:
-        h_text         : token representation sequence, (B, dim_out, T_text)
-
-    If dim_cond == 0:
-        FiLM conditioning is disabled and cond may be None.
-
-    If dim_cond > 0:
-        FiLM conditioning is enabled and cond must be provided in forward().
-    """
-
     def __init__(
         self,
         n_vocab: int,
@@ -106,41 +89,55 @@ class TextEncoder(nn.Module):
         dim_hidden: int,
         kernel_sizes: list[int],
         dim_cond: int = 0,
+        dropout: float = 0.0,
     ):
         super().__init__()
 
-        if len(kernel_sizes) == 0:
+        if not kernel_sizes:
             raise ValueError("kernel_sizes must contain at least one kernel size.")
         if dim_cond < 0:
             raise ValueError(f"dim_cond must be >= 0, got {dim_cond}.")
 
-        self.n_vocab = n_vocab
-        self.hidden_channels = dim_hidden
-        self.kernel_sizes = kernel_sizes
-        self.dim_cond = int(dim_cond)
+        self.dim_cond = dim_cond
 
-        self.out = nn.Embedding(n_vocab, dim_hidden)
-        nn.init.normal_(self.out.weight, mean=0.0, std=dim_hidden**-0.5)
-
-        self.conv_blocks = nn.ModuleList(
-            [
-                Conv1dBlock(
-                    channels=dim_hidden,
-                    kernel_size=kernel_size,
-                )
-                for kernel_size in kernel_sizes
-            ]
+        self.embedding = nn.Embedding(n_vocab, dim_hidden)
+        nn.init.normal_(
+            self.embedding.weight,
+            mean=0.0,
+            std=dim_hidden**-0.5,
         )
 
-        if self.dim_cond > 0:
-            self.cond_film = FiLMLayer(
-                channels=dim_hidden,
-                cond_dim=self.dim_cond,
+        self.pe = PositionalEncoding1d(channels=dim_hidden)
+
+        if dim_cond > 0:
+            self.blocks = nn.ModuleList(
+                [
+                    FiLMResidualBlock(
+                        channels=dim_hidden,
+                        cond_dim=dim_cond,
+                        kernel_size=kernel_size,
+                        dilation=1,
+                        dropout=dropout,
+                    )
+                    for kernel_size in kernel_sizes
+                ]
             )
         else:
-            self.cond_film = None
+            self.blocks = nn.ModuleList(
+                [
+                    Conv1dBlock(
+                        channels=dim_hidden,
+                        kernel_size=kernel_size,
+                    )
+                    for kernel_size in kernel_sizes
+                ]
+            )
 
-        self.out_proj = nn.Conv1d(dim_hidden, dim_out, kernel_size=1)
+        self.out_proj = nn.Conv1d(
+            dim_hidden,
+            dim_out,
+            kernel_size=1,
+        )
 
     @override
     def forward(
@@ -151,49 +148,33 @@ class TextEncoder(nn.Module):
     ) -> torch.Tensor:
         """
         Args:
-            x:
-                token ids, (B, T_text)
-
-            x_mask:
-                text mask, (B, T_text) or (B, 1, T_text)
-
-            cond:
-                optional conditioning vector, (B, dim_cond).
-                Required only when dim_cond > 0.
+            x:      token ids, (B, T_text)
+            x_mask: text mask, (B, T_text) or (B, 1, T_text)
+            cond:   conditioning vector, (B, dim_cond)
 
         Returns:
-            h_text:
-                (B, dim_out, T_text)
+            h_text: (B, dim_out, T_text)
         """
         if x_mask.dim() == 2:
             x_mask = x_mask.unsqueeze(1)
 
-        x_mask = x_mask.to(dtype=self.out.weight.dtype)
+        h_text = self.embedding(x).transpose(1, 2)
+        x_mask = x_mask.to(
+            device=h_text.device,
+            dtype=h_text.dtype,
+        )
 
-        # (B, T_text) -> (B, T_text, hidden_channels)
-        h_text = self.out(x)
-
-        # (B, T_text, hidden_channels) -> (B, hidden_channels, T_text)
-        h_text = h_text.transpose(1, 2)
-
+        h_text = self.pe(h_text)
         h_text = h_text * x_mask
 
-        for block in self.conv_blocks:
-            h_text = block(h_text, x_mask)
+        if self.dim_cond > 0:
+            for block in self.blocks:
+                h_text = block(h_text, cond)
+                h_text = h_text * x_mask
+        else:
+            for block in self.blocks:
+                h_text = block(h_text, x_mask)
 
-        h_text = h_text * x_mask
-
-        if self.cond_film is not None:
-            if cond is None:
-                raise ValueError(
-                    "cond must be provided when TextEncoder is initialized "
-                    + f"with dim_cond={self.dim_cond}."
-                )
-
-            h_text = self.cond_film(h_text, cond)
-            h_text = h_text * x_mask
-
-        # (B, hidden_channels, T_text) -> (B, dim_out, T_text)
         h_text = self.out_proj(h_text)
         h_text = h_text * x_mask
 

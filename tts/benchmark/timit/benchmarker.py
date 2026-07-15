@@ -15,8 +15,12 @@ from tqdm import tqdm
 from tts.models.modules.hifigan_vocoder import Generator
 from tts.models.ndaligner import AlignerFeatures, NDAligner
 from tts.models.utils.input_maker import AlignerInputMaker
+from tts.models.utils.lev_words_mapper import (
+    LevensteinWordsMapper,
+    MatchedWords,
+    WordSegment,
+)
 
-from ...models.utils.word_mapper import MatchedWords, WordSegment, WordsMapper
 from ..utils.entropy import compute_framewise_entropy
 from ..utils.mcd_dtw import compute_mcd_dtw
 
@@ -68,7 +72,7 @@ class TIMITBenchMarker:
         self.input_maker = input_maker
         self.tokenizer = input_maker.tokenizer
 
-        self.word_mapper = WordsMapper(
+        self.word_mapper = LevensteinWordsMapper(
             tokenizer=self.tokenizer,
             hyp_ignore_symbols=hyp_ignore_symbols,
             max_ref_words_per_hyp_word=max_ref_words_per_hyp_word,
@@ -220,7 +224,7 @@ class TIMITBenchMarker:
         text = self._read_txt(txt_path)
 
         batch = self.input_maker.make_with_audio(
-            wav_paths=wav_path,
+            wav_paths=[wav_path],
             scripts=[text],
         )
 
@@ -1269,7 +1273,7 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
         if entropy_rows:
             fig, ax = plt.subplots(figsize=(8, 7))
             ax.scatter(
-                [row.posterior_entropy for row in entropy_rows],
+                [row.posterior_entropy for row in entropy_rows],  # type: ignore
                 [row.mean_wbe_ms for row in entropy_rows],
                 alpha=0.65,
             )

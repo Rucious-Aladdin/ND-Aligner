@@ -65,7 +65,7 @@ def split_ipa_words(ipa_text: str) -> list[str]:
     return words
 
 
-class WordsMapper:
+class LevensteinWordsMapper:
     def __init__(
         self,
         tokenizer: BaseTokenizer,
@@ -387,7 +387,7 @@ if __name__ == "__main__":
         wrd_path: Path,
         *,
         tokenizer: BaseTokenizer,
-        mapper: WordsMapper,
+        mapper: LevensteinWordsMapper,
         verbose: bool,
     ) -> float:
         txt_path = find_matching_txt_path(wrd_path)
@@ -486,7 +486,7 @@ if __name__ == "__main__":
     # tokenizer = ESPEAKTokenizer()
     tokenizer = ARPATokenizer()
 
-    mapper = WordsMapper(
+    mapper = LevensteinWordsMapper(
         tokenizer=tokenizer,
         hyp_ignore_symbols=tokenizer.ignore_symbols,
         max_ref_words_per_hyp_word=5,

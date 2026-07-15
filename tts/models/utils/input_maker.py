@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-from contextlib import suppress
 from pathlib import Path
 from typing import NamedTuple, override
 
@@ -15,8 +14,8 @@ from tts.audio.mel_spectrogram import MelSpecExtractor
 from tts.audio.utils.suppress_impulsive_peaks import suppress_impulsive_peaks
 from tts.config.ndaligner.data_config import AudioConfigs
 from tts.config.preprocess.preprocess_config import PreprocessConfigs
-from tts.models.modules.spk_encoder import ECAPASpeakerEncoder
-from tts.models.utils.word_mapper import WordsMapper
+from tts.models.modules.spk_encoder import ECAPASpeakerEncoder, ResemblyzerSpeakerEncoder
+from tts.models.utils.lev_words_mapper import LevensteinWordsMapper
 from tts.tokenizer.load_tokenizer import load_tokenizer
 
 
@@ -87,8 +86,8 @@ class AlignerInputMaker(nn.Module):
         fastspeech2_lexicon_path: str = "",
         zero_nonspeech_region: bool = False,
         trim_nonspeech_region: bool = True,
-        suppress_impulsive_peak: bool = True,
-        reduce_noise: bool = True,
+        suppress_impulsive_peak: bool = False,
+        reduce_noise: bool = False,
         device: str | torch.device = "cpu",
     ):
         super().__init__()
@@ -101,12 +100,8 @@ class AlignerInputMaker(nn.Module):
         self.model_sr = int(audio_config.sr)
 
         # Amplitude normalization.
-        # RMS normalization has been removed from PreprocessConfigs.
         self.peak_normalize = bool(preprocess_config.peak_normalize)
         self.peak_target = float(preprocess_config.peak_target)
-
-        if self.peak_target <= 0.0:
-            raise ValueError(f"peak_target must be positive, got {self.peak_target}")
 
         self.tokenizer = load_tokenizer(
             tokenizer_type=tokenizer_type,
@@ -142,10 +137,13 @@ class AlignerInputMaker(nn.Module):
         use_silero_vad = self.zero_nonspeech_region or self.trim_nonspeech_region
         self.silero_model = load_silero_vad() if use_silero_vad else None
 
-        self.speaker_encoder = ECAPASpeakerEncoder(device=str(self.device))
+        if self.preprocess_config.spk_encoder_type == "ecapa-tdnn":
+            self.speaker_encoder = ECAPASpeakerEncoder(device=str(self.device))
+        elif self.preprocess_config.spk_encoder_type == "resemblyzer":
+            self.speaker_encoder = ResemblyzerSpeakerEncoder(device=str(device))
         self.speaker_encoder.eval()
 
-        self.word_mapper = WordsMapper(
+        self.word_mapper = LevensteinWordsMapper(
             tokenizer=self.tokenizer,
             hyp_ignore_symbols=self.tokenizer.ignore_symbols,
         )
@@ -154,7 +152,7 @@ class AlignerInputMaker(nn.Module):
     @override
     def forward(
         self,
-        wav_paths: str | Path | list[str | Path],
+        wav_paths: list[str | Path],
         scripts: list[str],
     ) -> AlignerInput:
         batch = self.make_with_audio(
@@ -166,11 +164,11 @@ class AlignerInputMaker(nn.Module):
     @torch.no_grad()
     def make_with_audio(
         self,
-        wav_paths: str | Path | list[str | Path],
+        wav_paths: list[str | Path],
         scripts: list[str],
     ) -> AlignerInputWithAudio:
-        wav_path_list = self._as_path_list(wav_paths)
-        texts = self._as_script_list(scripts)
+        wav_path_list = [Path(path) for path in wav_paths]
+        texts = list(scripts)
 
         if len(wav_path_list) != len(texts):
             raise ValueError(
@@ -214,17 +212,8 @@ class AlignerInputMaker(nn.Module):
         y = self.spec_extractor(wav_model)
         y_lengths = self.compute_spec_lengths(wav_model_lengths)
 
-        self._validate_spec_lengths(
-            y=y,
-            y_lengths=y_lengths,
-            wav_lengths=wav_model_lengths,
-        )
-
-        cond = self._make_condition(
-            wav_16k=wav_16k,
-            y_dtype=y.dtype,
-            batch_size=len(wav_path_list),
-        )
+        cond = self.speaker_encoder(wav_16k)
+        cond = cond.view(len(wav_path_list), -1).to(device=self.device, dtype=y.dtype)
 
         wav_16k_start_offset = torch.tensor(
             wav_16k_start_offset_list,
@@ -247,6 +236,19 @@ class AlignerInputMaker(nn.Module):
             wav_16k_start_offset=wav_16k_start_offset,
             wav_16k_end_offset=wav_16k_end_offset,
             texts=texts,
+        )
+
+    def compute_spec_lengths(self, wav_lengths: torch.Tensor) -> torch.Tensor:
+        n_fft = int(self.audio_config.n_fft)
+        hop = int(self.audio_config.hop_length)
+        pad = int((n_fft - hop) / 2)
+        return (
+            torch.div(
+                wav_lengths + 2 * pad - n_fft,
+                hop,
+                rounding_mode="floor",
+            )
+            + 1
         )
 
     def _load_waveforms(
@@ -405,54 +407,6 @@ class AlignerInputMaker(nn.Module):
             wav_16k_end_offset,
         )
 
-    def _make_condition(
-        self,
-        wav_16k: torch.Tensor,
-        y_dtype: torch.dtype,
-        batch_size: int,
-    ) -> torch.Tensor | None:
-        emb = self.speaker_encoder(wav_16k)
-        return emb.view(batch_size, -1).to(device=self.device, dtype=y_dtype)
-
-    def compute_spec_lengths(self, wav_lengths: torch.Tensor) -> torch.Tensor:
-        n_fft = int(self.audio_config.n_fft)
-        hop = int(self.audio_config.hop_length)
-        pad = int((n_fft - hop) / 2)
-        return (
-            torch.div(
-                wav_lengths + 2 * pad - n_fft,
-                hop,
-                rounding_mode="floor",
-            )
-            + 1
-        )
-
-    def _validate_spec_lengths(
-        self,
-        y: torch.Tensor,
-        y_lengths: torch.Tensor,
-        wav_lengths: torch.Tensor,
-    ) -> None:
-        """
-        Sanity-check length formula for the current STFT convention.
-
-        This is especially useful for TIMIT WBE because frame-to-time conversion
-        assumes y_lengths and y.size(2) are in the same frame coordinate.
-        """
-        if y.size(0) == 1:
-            actual = int(y.size(2))
-            computed = int(y_lengths[0].item())
-
-            if computed != actual:
-                raise RuntimeError(
-                    "Spec length mismatch in AlignerInputMaker. "
-                    + f"computed y_lengths={computed}, actual y.size(2)={actual}, "
-                    + f"wav_lengths={wav_lengths.tolist()}, "
-                    + f"sr={self.audio_config.sr}, "
-                    + f"hop={self.audio_config.hop_length}, "
-                    + f"n_fft={self.audio_config.n_fft}"
-                )
-
     @staticmethod
     def _peak_normalize_pair(
         wav_16k: torch.Tensor,
@@ -471,19 +425,6 @@ class AlignerInputMaker(nn.Module):
         wav_model = torch.clamp(wav_model * gain, -1.0, 1.0)
 
         return wav_16k, wav_model
-
-    @staticmethod
-    def _as_path_list(paths: str | Path | list[str | Path]) -> list[Path]:
-        if isinstance(paths, (str, Path)):
-            return [Path(paths)]
-        return [Path(path) for path in paths]
-
-    @staticmethod
-    def _as_script_list(scripts: list[str]) -> list[str]:
-        if isinstance(scripts, str):
-            raise TypeError("scripts must be a sequence of str, not a bare str")
-
-        return list(scripts)
 
     def _pad_token_sequences(
         self,

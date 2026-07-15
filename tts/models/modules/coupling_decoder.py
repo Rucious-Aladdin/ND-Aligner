@@ -3,7 +3,7 @@ from typing import NamedTuple, override
 import torch
 import torch.nn as nn
 
-from .spec_decoder import SpecDecoderBlock
+from tts.models.layers.film_blocks import FiLMResidualBlock
 
 
 class CouplingDecoderOutput(NamedTuple):
@@ -69,21 +69,21 @@ class FiLMRefineBlock(nn.Module):
 
         self.blocks = nn.ModuleList(
             [
-                SpecDecoderBlock(
+                FiLMResidualBlock(
                     channels=hidden_channels,
                     cond_dim=cond_dim,
                     kernel_size=1,
                     dilation=1,
                     dropout=dropout,
                 ),
-                SpecDecoderBlock(
+                FiLMResidualBlock(
                     channels=hidden_channels,
                     cond_dim=cond_dim,
                     kernel_size=kernel_size,
                     dilation=dilation,
                     dropout=dropout,
                 ),
-                SpecDecoderBlock(
+                FiLMResidualBlock(
                     channels=hidden_channels,
                     cond_dim=cond_dim,
                     kernel_size=1,
@@ -140,7 +140,7 @@ class FiLMRefineBlock(nn.Module):
         return x
 
 
-class SpecCouplingDecoder(nn.Module):
+class CouplingDecoder(nn.Module):
     """
     Progressive coupling decoder with shared refinement block and shared mel head.
 
@@ -492,7 +492,7 @@ if __name__ == "__main__":
     dropout = 0.1
     loss_decay_factor = 0.5
 
-    decoder = SpecCouplingDecoder(
+    decoder = CouplingDecoder(
         in_channels=in_channels,
         out_channels=out_channels,
         hidden_channels=hidden_channels,

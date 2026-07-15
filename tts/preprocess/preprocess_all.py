@@ -11,7 +11,7 @@ import torch
 from tqdm import tqdm
 
 from tts.config.utils.io import load_config
-from tts.models.modules.spk_encoder import ECAPASpeakerEncoder
+from tts.models.modules.spk_encoder import ECAPASpeakerEncoder, ResemblyzerSpeakerEncoder
 from tts.preprocess.audio_preprocessor import AudioPreprocessor
 
 from ..config.preprocess.preprocess_config import PreprocessConfigs
@@ -252,15 +252,16 @@ def run_speaker_embedding_extraction(
 ) -> dict[str, int]:
     print("\n>>> Initializing SpeakerEncoder (ECAPA-TDNN)...")
 
+    spk_encoder_type = preprocess_config.spk_encoder_type
+    print(f">>> Initializing SpeakerEncoder ({spk_encoder_type.upper()})...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    try:
+    if spk_encoder_type == "ecapa-tdnn":
         speaker_encoder = ECAPASpeakerEncoder(device=device)
-        speaker_encoder.eval()
-    except Exception as e:
-        raise RuntimeError(
-            f"Error loading SpeakerEncoder: {e}. Cannot proceed without a valid model."
-        ) from e
+    elif spk_encoder_type == "resemblyzer":
+        speaker_encoder = ResemblyzerSpeakerEncoder(device=device)
+    else:
+        raise RuntimeError(f"Invalid Speaker Encoder Type for {spk_encoder_type}")
 
     print(f">>> Extracting speaker embeddings from: {preprocess_config.preprocessed_dir}")
 
@@ -290,7 +291,7 @@ def run_speaker_embedding_extraction(
         stats["wav_scanned"] += 1
 
         base_path, _ = os.path.splitext(wav_path)
-        output_path = f"{base_path}_spk.pt"
+        output_path = f"{base_path}_{preprocess_config.spk_encoder_type}_spk.pt"
 
         if skip_existing and os.path.exists(output_path):
             stats["spk_skipped"] += 1

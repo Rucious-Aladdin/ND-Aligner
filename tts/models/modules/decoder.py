@@ -3,62 +3,10 @@ from typing import override
 import torch
 import torch.nn as nn
 
-from ..layers.film_layer import FiLMLayer
+from ..layers.film_blocks import FiLMResidualBlock
 
 
-class SpecDecoderBlock(nn.Module):
-    """
-    A single block for the AuxiliaryDecoder, combining a dilated Conv1d,
-    FiLM for conditioning, and activation.
-    """
-
-    def __init__(
-        self,
-        channels: int,
-        cond_dim: int,
-        kernel_size: int,
-        dilation: int,
-        dropout: float,
-    ):
-        super().__init__()
-
-        padding = (kernel_size - 1) * dilation // 2
-        self.conv = nn.Conv1d(
-            channels,
-            channels,
-            kernel_size,
-            dilation=dilation,
-            padding=padding,
-        )
-        self.film = FiLMLayer(channels, cond_dim)
-        self.act = nn.GELU()
-        self.drop = nn.Dropout(dropout)
-        self.norm = nn.LayerNorm(channels)
-
-    @override
-    def forward(self, x: torch.Tensor, cond: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: Input features (B, C, T)
-            cond: Conditioning vector (B, D_cond)
-        """
-        residual = x
-        x = self.conv(x)
-
-        # Ensure sequence length is maintained
-        if x.size(2) > residual.size(2):
-            x = x[:, :, : residual.size(2)]
-        elif x.size(2) < residual.size(2):
-            x = nn.functional.pad(x, (0, residual.size(2) - x.size(2)))
-
-        x = self.film(x, cond)
-        x = self.act(x)
-        x = self.drop(x)
-
-        return self.norm((residual + x).transpose(1, 2)).transpose(1, 2)
-
-
-class SpecDecoder(nn.Module):
+class Decoder(nn.Module):
     """
     Shallow auxiliary decoder with FiLM conditioning and dilated convolutions.
     """
@@ -84,7 +32,7 @@ class SpecDecoder(nn.Module):
         for i, kernel_size in enumerate(kernel_sizes):
             dilation = dilation_base**i
             self.layers.append(
-                SpecDecoderBlock(
+                FiLMResidualBlock(
                     channels=hidden_channels,
                     cond_dim=cond_dim,
                     kernel_size=kernel_size,

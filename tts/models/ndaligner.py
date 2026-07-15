@@ -6,10 +6,10 @@ import librosa
 import torch
 import torch.nn.functional as F
 
-from tts.models.modules.coupling_decoder import CouplingDecoderOutput, SpecCouplingDecoder
+from tts.models.modules.coupling_decoder import CouplingDecoder, CouplingDecoderOutput
 from tts.models.modules.crf_aligner import LinearCRFAligner
+from tts.models.modules.decoder import Decoder
 from tts.models.modules.hifigan_vocoder import Generator
-from tts.models.modules.spec_decoder import SpecDecoder
 from tts.models.modules.spec_encoder import SpecEncoder
 from tts.models.modules.text_encoder import TextEncoder
 from tts.models.utils.input_maker import AlignerInputMaker
@@ -35,7 +35,7 @@ def init_nd_aligner(
 
     dec_cfg = config.spec_dec
     if config.spec_dec.decoder_type == "conv1d":
-        spec_decoder = SpecDecoder(
+        spec_decoder = Decoder(
             in_channels=dec_cfg.in_channels,
             out_channels=dec_cfg.out_channels,
             hidden_channels=dec_cfg.hidden_channels,
@@ -45,7 +45,7 @@ def init_nd_aligner(
             dropout=dec_cfg.dropout,
         )
     elif config.spec_dec.decoder_type == "coupling":
-        spec_decoder = SpecCouplingDecoder(
+        spec_decoder = CouplingDecoder(
             in_channels=dec_cfg.in_channels,
             out_channels=dec_cfg.out_channels,
             hidden_channels=dec_cfg.hidden_channels,
@@ -356,7 +356,7 @@ class NDAligner(BaseModel):
         text_encoder: TextEncoder,
         spec_encoder: SpecEncoder,
         crf_aligner: LinearCRFAligner,
-        spec_decoder: SpecDecoder | SpecCouplingDecoder | None = None,
+        spec_decoder: Decoder | CouplingDecoder | None = None,
         input_maker: AlignerInputMaker | None = None,
         use_delta_feat: bool = False,
         use_delta_delta_feat: bool = False,
@@ -441,7 +441,7 @@ class NDAligner(BaseModel):
         valid_spec_mask = spec_mask.bool()  # (B, T_spec), True = valid
 
         coupling_dec_out = None
-        if isinstance(self.spec_decoder, SpecCouplingDecoder):
+        if isinstance(self.spec_decoder, CouplingDecoder):
             # Coupling decoder:
             #   input  : (B, T_spec, C_text)
             #   target : (B, T_spec, n_mels)

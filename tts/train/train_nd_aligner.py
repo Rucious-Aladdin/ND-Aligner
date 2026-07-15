@@ -9,9 +9,9 @@ from tts.benchmark.timit.benchmarker import TIMITBenchMarker
 from tts.config.ndaligner.data_config import DataConfig, LossConfigs, TrainConfigs
 from tts.config.ndaligner.training_module_config import NDAlignerTrainingModuleConfigs
 from tts.config.utils.io import load_config, save_config
-from tts.data.data_types import LossValues, TTSBatch
+from tts.data.data_types import LossValues, TrainBatch
+from tts.data.datafactory import DataFactory
 from tts.data.quantile_bucket_sampler import QuantileDurationBatchSampler
-from tts.data.tts_datafactory import TTSDataFactory
 from tts.logger.timit_logger import NDAlignerTimitLogger
 from tts.logger.utils.plot_alignment import plot_alignment
 from tts.logger.utils.plot_spectrogram import plot_spectrogram
@@ -22,9 +22,8 @@ from tts.models.ndaligner import (
     NDAlignerTrainingModuleForward,
     init_nd_aligner_training_module,
 )
-from tts.tokenizer.load_tokenizer import load_tokenizer
-from tts.utils.anneal import get_linear_anneal_weight
-from tts.utils.checkpoint_manager import CheckpointManager
+from tts.train.utils.anneal import get_linear_anneal_weight
+from tts.train.utils.checkpoint_manager import CheckpointManager
 from tts.utils.set_seed import set_seed
 
 from .base_trainer import BaseTrainer
@@ -113,13 +112,14 @@ class NDAlignerTrainer(
 
     @override
     def on_fit_start(self) -> None:
+        assert self.model.nd_aligner.input_maker is not None
         self.data_config: DataConfig
         self.model_config: NDAlignerTrainingModuleConfigs
 
         self.train_time_eval_logger = None
         self.timit_ckpt_manager = None
 
-        self.tokenizer = load_tokenizer(self.model_config.nd_aligner.tokenizer_type)
+        self.tokenizer = self.model.nd_aligner.input_maker.tokenizer
 
         if self.data_config.extra_exp.train_time_eval_logging:
 
@@ -166,7 +166,7 @@ class NDAlignerTrainer(
     @override
     def setup_dataloader(self) -> tuple[DataLoader[Any], DataLoader[Any]]:
         print("📦 Initializing datasets...")
-        data_factory = TTSDataFactory(self.data_config)
+        data_factory = DataFactory(self.data_config)
         return data_factory.train_loader, data_factory.valid_loader
 
     @override
@@ -225,7 +225,7 @@ class NDAlignerTrainer(
     @override
     def train_step(
         self,
-        batch: TTSBatch,
+        batch: TrainBatch,
         epoch: int,
         step: int,
     ) -> tuple[torch.Tensor, LossValues, AlignerForward]:
@@ -267,7 +267,7 @@ class NDAlignerTrainer(
     @override
     def on_train_step_end(
         self,
-        batch: TTSBatch,
+        batch: TrainBatch,
         epoch: int,
         step: int,
         is_step_boundary: bool,
@@ -347,7 +347,7 @@ class NDAlignerTrainer(
     @override
     def validation_step(
         self,
-        batch: TTSBatch,
+        batch: TrainBatch,
         epoch: int,
         step: int,
     ) -> tuple[float, LossValues, AlignerForward]:
@@ -389,7 +389,7 @@ class NDAlignerTrainer(
         step: int,
         avg_val_loss: float,
         avg_metrics: LossValues,
-        last_batch: TTSBatch | None,
+        last_batch: TrainBatch | None,
         last_output: AlignerForward | None,
     ):
         if self.logger:
@@ -451,7 +451,7 @@ class NDAlignerTrainer(
 
     def _log_visuals(
         self,
-        batch: TTSBatch,
+        batch: TrainBatch,
         out: AlignerForward,
         step: int,
         prefix: str,

@@ -5,12 +5,12 @@ import random
 from abc import ABC, abstractmethod
 from typing import NamedTuple, override
 
-from .data_types import TTSItem
+from .data_types import TrainItem
 
 
 class ParsedItems(NamedTuple):
-    train_items: list[TTSItem]
-    test_items: list[TTSItem] | None = None
+    train_items: list[TrainItem]
+    test_items: list[TrainItem] | None = None
 
 
 class BaseDatasetParser(ABC):
@@ -23,6 +23,7 @@ class LJSpeechParser(BaseDatasetParser):
     def __init__(
         self,
         root_dir: str,
+        spk_encoder_tag: str = "",
         num_test_samples: int = 0,
         test_split_seed: int | None = None,
     ):
@@ -33,12 +34,13 @@ class LJSpeechParser(BaseDatasetParser):
             raise ValueError("There exist test samples but split seed is not set.")
 
         self.root_dir = root_dir
+        self.spk_encoder_tag = spk_encoder_tag
         self.num_test_samples = num_test_samples
         self.test_split_seed = test_split_seed
 
     @override
     def parse(self) -> ParsedItems:
-        items: list[TTSItem] = []
+        items: list[TrainItem] = []
 
         metadata_path = os.path.join(self.root_dir, "metadata.csv")
         wav_dir = os.path.join(self.root_dir, "wavs")
@@ -58,13 +60,13 @@ class LJSpeechParser(BaseDatasetParser):
 
                 audio_path = os.path.join(wav_dir, f"{wav_id}.wav")
                 base_path = os.path.join(wav_dir, wav_id)
-                spk_path = f"{base_path}_spk.pt"
+                spk_path = f"{base_path}_{self.spk_encoder_tag}_spk.pt"
 
                 if not os.path.exists(spk_path):
                     spk_path = ""
 
                 items.append(
-                    TTSItem(
+                    TrainItem(
                         audio_path=audio_path,
                         spk_path=spk_path,
                         text=text,
@@ -101,15 +103,17 @@ class VCTKParser(BaseDatasetParser):
     def __init__(
         self,
         root_dir: str,
+        spk_encoder_tag: str = "",
         test_speaker_ids: list[str] | None = None,
     ):
         self.root_dir = root_dir
+        self.spk_encoder_tag = spk_encoder_tag
         self.test_speaker_ids = set(test_speaker_ids or [])
 
     @override
     def parse(self) -> ParsedItems:
-        train_items: list[TTSItem] = []
-        test_items: list[TTSItem] = []
+        train_items: list[TrainItem] = []
+        test_items: list[TrainItem] = []
 
         wav_root = os.path.join(self.root_dir, "wav48_silence_trimmed")
         txt_root = os.path.join(self.root_dir, "txt")
@@ -151,11 +155,11 @@ class VCTKParser(BaseDatasetParser):
             with open(text_path, "r", encoding="utf-8") as f:
                 text = f.read().strip()
 
-            spk_path = os.path.splitext(audio_path)[0] + "_spk.pt"
+            spk_path = os.path.splitext(audio_path)[0] + f"_{self.spk_encoder_tag}_spk.pt"
             if not os.path.exists(spk_path):
                 spk_path = ""
 
-            item = TTSItem(
+            item = TrainItem(
                 audio_path=audio_path,
                 spk_path=spk_path,
                 text=text,
@@ -197,9 +201,11 @@ class LibriTTSParser(BaseDatasetParser):
     def __init__(
         self,
         root_dir: str,
+        spk_encoder_tag: str = "",
         subsets: list[str] | None = None,
     ):
         self.root_dir = root_dir
+        self.spk_encoder_tag = spk_encoder_tag
         self.subsets = subsets
 
     @override
@@ -232,7 +238,7 @@ class LibriTTSParser(BaseDatasetParser):
                 with open(text_path, "r", encoding="utf-8") as f:
                     text = f.read().strip()
 
-                spk_path = base_path + "_spk.pt"
+                spk_path = base_path + f"_{self.spk_encoder_tag}_spk.pt"
                 if not os.path.exists(spk_path):
                     spk_path = ""
 
@@ -243,7 +249,7 @@ class LibriTTSParser(BaseDatasetParser):
                 utt_id = os.path.splitext(os.path.basename(audio_path))[0]
 
                 items.append(
-                    TTSItem(
+                    TrainItem(
                         audio_path=audio_path,
                         spk_path=spk_path,
                         text=text,

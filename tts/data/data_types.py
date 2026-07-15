@@ -10,7 +10,7 @@ class LossValues(NamedTuple):
     viterbi_kl: float
 
 
-class TTSItem(NamedTuple):
+class TrainItem(NamedTuple):
     audio_path: str  # preprocessed wav file path
     spk_path: str  # spk-embedding pt file path
     text: str  # script file
@@ -21,7 +21,7 @@ class TTSItem(NamedTuple):
     dataset: str = ""
 
 
-class TTSDatasetInstance(NamedTuple):
+class TrainDatasetInstance(NamedTuple):
     text: torch.Tensor  # (T_text,)
 
     # Alignment input feature.
@@ -43,7 +43,7 @@ class TTSDatasetInstance(NamedTuple):
     dataset: str
 
 
-class TTSBatch(NamedTuple):
+class TrainBatch(NamedTuple):
     text: torch.Tensor  # (B, T_text)
     text_lengths: torch.Tensor  # (B,)
 

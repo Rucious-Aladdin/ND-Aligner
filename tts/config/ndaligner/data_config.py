@@ -4,13 +4,14 @@ import os
 import os.path
 from dataclasses import dataclass, field
 
+from ..preprocess.preprocess_config import SPK_ENCODER_TYPE, PreprocessConfigs
+
 SAMPLE_RATE = 22050
 INPUT_FEATURE_TYPE = "mel"
 # INPUT_FEATURE_TYPE: str = "linspec"
 
 DATA_PARENT_DIR = "/shared/data_zfs/blue2959"
-TOKENIZER_TYPE: str = "espeak"
-# TOKENIZER_TYPE: str = "arpa"
+TOKENIZER_TYPE: str = "espeak"  # "arpa"
 FASTSPEECH2_TOKENIZER_LEXION_PATH = "./tts/baseline/FastSpeech2/lexicon/vctk-lexicon.txt"
 
 N_MELS = 80
@@ -33,8 +34,10 @@ def cache_dir_name() -> str:
         raise ValueError()
 
     tokenizer_tag = f"{TOKENIZER_TYPE}"
-
-    return f"cache-{dataset_tag}-feature_{feature_tag}-tokenizer_{tokenizer_tag}"
+    spk_encoder_tag = f"{SPK_ENCODER_TYPE}"
+    return (
+        f"cache-{dataset_tag}-feature_{feature_tag}-tokenizer_{tokenizer_tag}-spk_{spk_encoder_tag}"
+    )
 
 
 @dataclass(frozen=True)
@@ -66,11 +69,9 @@ class DatasetConfigs:
         default_factory=lambda: ["p225", "p226", "p227", "p228", "p229", "p232"]
     )
 
-    libritts_root: str = os.path.join(
-        DATA_PARENT_DIR, "LibriTTS-train-clean-100-preprocessed-trimmed"
-    )
+    libritts_root: str = os.path.join(DATA_PARENT_DIR, "LibriTTS-preprocessed-trimmed")
     libritts_subsets: list[str] = field(
-        default_factory=lambda: ["train-clean-100"]
+        default_factory=lambda: ["train-clean-100", "train-clean-360"]
     )  # train-clean-360
 
     data_cache_dir: str = field(
@@ -187,6 +188,7 @@ class LossConfigs:
 
 @dataclass(frozen=True)
 class DataConfig:
+    preprocess: PreprocessConfigs = field(default_factory=PreprocessConfigs)
     audio: AudioConfigs = field(default_factory=AudioConfigs)
     dataset: DatasetConfigs = field(default_factory=DatasetConfigs)
     train: TrainConfigs = field(default_factory=TrainConfigs)

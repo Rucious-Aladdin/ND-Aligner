@@ -10,12 +10,12 @@ from tqdm import tqdm
 from tts.config.ndaligner.data_config import DataConfig
 
 from .data_parser import LibriTTSParser, LJSpeechParser, VCTKParser
-from .data_types import TTSBatch, TTSDatasetInstance, TTSItem
+from .data_types import TrainBatch, TrainDatasetInstance, TrainItem
+from .dataset import TTSDataset
 from .quantile_bucket_sampler import QuantileDurationBatchSampler
-from .tts_dataset import TTSDataset
 
 
-class TTSCollate:
+class Collate:
     def __init__(
         self,
         spec_pad_value: float,
@@ -26,8 +26,8 @@ class TTSCollate:
 
     def __call__(
         self,
-        batch: list[TTSDatasetInstance],
-    ) -> TTSBatch:
+        batch: list[TrainDatasetInstance],
+    ) -> TrainBatch:
         xs = [item.text for item in batch]
         ys = [item.spec for item in batch]
         y_recons = [item.recon_spec for item in batch]
@@ -81,7 +81,7 @@ class TTSCollate:
 
         cond_batched = torch.stack(conds, dim=0)
 
-        return TTSBatch(
+        return TrainBatch(
             text=x_padded,
             text_lengths=x_lengths,
             spec=y_padded,
@@ -97,15 +97,15 @@ class TTSCollate:
         )
 
 
-class TTSDataFactory:
+class DataFactory:
     def __init__(self, config: DataConfig):
         self.config = config
         self.dataset_cfg = config.dataset
         self.train_cfg = config.train
 
         # 1. Parse all selected datasets.
-        all_train_items: list[TTSItem] = []
-        all_test_items: list[TTSItem] = []
+        all_train_items: list[TrainItem] = []
+        all_test_items: list[TrainItem] = []
 
         for ds_name in self.dataset_cfg.dataset_list:
             ds_name = ds_name.lower()
@@ -113,17 +113,20 @@ class TTSDataFactory:
             if ds_name == "ljspeech":
                 parser = LJSpeechParser(
                     root_dir=self.dataset_cfg.ljspeech_root,
+                    spk_encoder_tag=self.config.preprocess.spk_encoder_type,
                     num_test_samples=self.dataset_cfg.ljspeech_num_test_samples,
                     test_split_seed=self.dataset_cfg.seed,
                 )
             elif ds_name == "vctk":
                 parser = VCTKParser(
                     root_dir=self.dataset_cfg.vctk_root,
+                    spk_encoder_tag=self.config.preprocess.spk_encoder_type,
                     test_speaker_ids=self.dataset_cfg.vctk_test_speakers,
                 )
             elif ds_name == "libritts":
                 parser = LibriTTSParser(
                     root_dir=self.dataset_cfg.libritts_root,
+                    spk_encoder_tag=self.config.preprocess.spk_encoder_type,
                     subsets=self.dataset_cfg.libritts_subsets,
                 )
             else:
@@ -201,17 +204,17 @@ class TTSDataFactory:
         self.valid_dataset = TTSDataset(self.valid_items, config)
         self.test_dataset = TTSDataset(self.test_items, config)
 
-        self.collate_fn = TTSCollate(
+        self.collate_fn = Collate(
             spec_pad_value=self.train_dataset.spec_pad_value,
             recon_spec_pad_value=self.train_dataset.recon_spec_pad_value,
         )
 
     def _filter_items_by_duration(
         self,
-        items: list[TTSItem],
+        items: list[TrainItem],
         desc: str,
-    ) -> list[tuple[TTSItem, float]]:
-        filtered_pairs: list[tuple[TTSItem, float]] = []
+    ) -> list[tuple[TrainItem, float]]:
+        filtered_pairs: list[tuple[TrainItem, float]] = []
 
         if not items:
             return filtered_pairs

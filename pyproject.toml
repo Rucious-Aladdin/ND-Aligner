@@ -29,6 +29,7 @@ dependencies = [
   "pysptk>=1.0.1",
   "pytest>=9.0.2",
   "pyworld>=0.3.5",
+  "resemblyzer>=0.1.4",
   "scipy>=1.17.1",
   "silero-vad>=6.2.1",
   "soundfile>=0.13.1",
