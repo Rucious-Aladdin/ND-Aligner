@@ -1,3 +1,7 @@
+import ctypes
+import logging
+import time
+from pathlib import Path
 from typing import override
 
 import torch
@@ -261,6 +265,54 @@ class NodePotentialPredictor(nn.Module):
         return unary_potential
 
 
+_VITERBI_LIBRARY: ctypes.CDLL | None = None
+_VITERBI_LIBRARY_ERROR: Exception | None = None
+_VITERBI_FALLBACK_LOGGED = False
+logger = logging.getLogger(__name__)
+
+
+def _load_viterbi_library() -> ctypes.CDLL:
+    """Load and configure the local C Viterbi shared library once."""
+    global _VITERBI_LIBRARY
+    global _VITERBI_LIBRARY_ERROR
+
+    if _VITERBI_LIBRARY is not None:
+        return _VITERBI_LIBRARY
+
+    if _VITERBI_LIBRARY_ERROR is not None:
+        raise RuntimeError(
+            "The C Viterbi library previously failed to load."
+        ) from _VITERBI_LIBRARY_ERROR
+
+    library_path = Path(__file__).resolve().parent / "mas" / "viterbi_dp.so"
+
+    try:
+        library = ctypes.CDLL(str(library_path))
+        function = library.viterbi_forward_backtrack_f32
+
+        function.argtypes = [
+            ctypes.c_void_p,  # log_b: float32 [B, T_speech, T_text]
+            ctypes.c_void_p,  # dp_valid: uint8 [B, T_speech, T_text]
+            ctypes.c_void_p,  # initial_delta: float32 [B, T_text]
+            ctypes.c_void_p,  # spec_lengths: int64 [B]
+            ctypes.c_void_p,  # text_lengths: int64 [B]
+            ctypes.c_void_p,  # optional_separator_mask: uint8 [B, T_text] or NULL
+            ctypes.c_int64,
+            ctypes.c_int64,
+            ctypes.c_int64,
+            ctypes.c_float,
+            ctypes.c_void_p,  # path: int64 [B, T_speech]
+            ctypes.c_void_p,  # viterbi_logp: float32 [B]
+        ]
+        function.restype = ctypes.c_int
+    except Exception as exc:
+        _VITERBI_LIBRARY_ERROR = exc  # type: ignore
+        raise RuntimeError(f"Failed to load C Viterbi library: {library_path}") from exc
+
+    _VITERBI_LIBRARY = library  # type: ignore
+    return library
+
+
 class LinearCRFAligner(nn.Module):
     """
     Unary-only monotonic latent-path CRF aligner.
@@ -322,6 +374,12 @@ class LinearCRFAligner(nn.Module):
             conv_num_layers=conv_num_layers,
             conv_kernel_size=conv_kernel_size,
         )
+
+        try:
+            self.viterbi_lib = _load_viterbi_library()
+        except:
+            print("[WARNING] load-viterbi lib failed.")
+            self.viterbi_lib = None
 
     @override
     def forward(
@@ -656,12 +714,144 @@ class LinearCRFAligner(nn.Module):
         optional_separator_mask: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        MAP path decoding under the same unary-only CRF score:
+        Decode with the C implementation and fall back to PyTorch on failure.
 
-            z* = argmax_z sum_t log_b[t, z_t]
+        The shared object is expected at:
 
-        subject to strict monotone topology.
+            tts/models/modules/mas/viterbi_dp.so
         """
+        global _VITERBI_FALLBACK_LOGGED
+
+        try:
+            return self.__viterbi_decode_c(
+                log_b=log_b,
+                dp_valid=dp_valid,
+                spec_lengths=spec_lengths,
+                text_lengths=text_lengths,
+                optional_separator_mask=optional_separator_mask,
+            )
+        except Exception:
+            if not _VITERBI_FALLBACK_LOGGED:
+                logger.exception(
+                    "C Viterbi decoding failed; falling back to the PyTorch implementation."
+                )
+                _VITERBI_FALLBACK_LOGGED = True  # type: ignore
+
+            return self.__viterbi_decode_python(
+                log_b=log_b,
+                dp_valid=dp_valid,
+                spec_lengths=spec_lengths,
+                text_lengths=text_lengths,
+                optional_separator_mask=optional_separator_mask,
+            )
+
+    def __viterbi_decode_c(
+        self,
+        log_b: torch.Tensor,
+        dp_valid: torch.Tensor,
+        spec_lengths: torch.Tensor,
+        text_lengths: torch.Tensor,
+        optional_separator_mask: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Run forward recursion and backtracking through ``viterbi_dp.so``."""
+        B, T_speech, T_text = log_b.shape
+        device = log_b.device
+
+        library = _load_viterbi_library()
+        function = library.viterbi_forward_backtrack_f32
+
+        # The C ABI is fixed to float32, uint8, and int64.
+        log_b_cpu = log_b.detach().to(device="cpu", dtype=torch.float32).contiguous()
+        dp_valid_cpu = dp_valid.detach().to(device="cpu", dtype=torch.uint8).contiguous()
+        spec_lengths_cpu = spec_lengths.detach().to(device="cpu", dtype=torch.int64).contiguous()
+        text_lengths_cpu = text_lengths.detach().to(device="cpu", dtype=torch.int64).contiguous()
+
+        if optional_separator_mask is None:
+            optional_separator_mask_cpu = None
+            optional_separator_pointer = ctypes.c_void_p()
+        else:
+            optional_separator_mask_cpu = (
+                optional_separator_mask.detach().to(device="cpu", dtype=torch.uint8).contiguous()
+            )
+            optional_separator_pointer = ctypes.c_void_p(optional_separator_mask_cpu.data_ptr())
+
+        initial_delta_cpu = (
+            self.__initial_dp_score(
+                log_b=log_b_cpu,
+                dp_valid=dp_valid_cpu.bool(),
+                optional_separator_mask=(
+                    None
+                    if optional_separator_mask_cpu is None
+                    else optional_separator_mask_cpu.bool()
+                ),
+            )
+            .to(dtype=torch.float32)
+            .contiguous()
+        )
+
+        path_cpu = torch.empty(
+            (B, T_speech),
+            dtype=torch.int64,
+            device="cpu",
+        )
+        c_viterbi_logp_cpu = torch.empty(
+            (B,),
+            dtype=torch.float32,
+            device="cpu",
+        )
+
+        status = function(
+            ctypes.c_void_p(log_b_cpu.data_ptr()),
+            ctypes.c_void_p(dp_valid_cpu.data_ptr()),
+            ctypes.c_void_p(initial_delta_cpu.data_ptr()),
+            ctypes.c_void_p(spec_lengths_cpu.data_ptr()),
+            ctypes.c_void_p(text_lengths_cpu.data_ptr()),
+            optional_separator_pointer,
+            ctypes.c_int64(B),
+            ctypes.c_int64(T_speech),
+            ctypes.c_int64(T_text),
+            ctypes.c_float(float(self.neg_large)),
+            ctypes.c_void_p(path_cpu.data_ptr()),
+            ctypes.c_void_p(c_viterbi_logp_cpu.data_ptr()),
+        )
+
+        if status != 0:
+            raise RuntimeError(f"viterbi_forward_backtrack_f32 failed with status={status}.")
+
+        path = path_cpu.to(device=device)
+        valid_t = path >= 0
+
+        hard_attn = log_b.new_zeros((B, T_speech, T_text))
+
+        b_idx = torch.arange(B, device=device).view(B, 1).expand(B, T_speech)
+        t_idx = torch.arange(T_speech, device=device).view(1, T_speech).expand(B, T_speech)
+        j_idx = path.clamp_min(0)
+
+        hard_attn[b_idx[valid_t], t_idx[valid_t], j_idx[valid_t]] = 1.0
+        hard_attn = hard_attn.masked_fill(~dp_valid, 0.0)
+        hard_durations = hard_attn.sum(dim=1)
+
+        # Recompute the selected path score from log_b so viterbi_logp keeps
+        # its gradient with respect to log_b. The C-produced value is used
+        # only to execute and validate the C ABI output buffer.
+        selected_log_b = torch.gather(
+            log_b,
+            dim=2,
+            index=j_idx.unsqueeze(-1),
+        ).squeeze(-1)
+        viterbi_logp = selected_log_b.masked_fill(~valid_t, 0.0).sum(dim=1)
+
+        return hard_attn, hard_durations, path, viterbi_logp
+
+    def __viterbi_decode_python(
+        self,
+        log_b: torch.Tensor,
+        dp_valid: torch.Tensor,
+        spec_lengths: torch.Tensor,
+        text_lengths: torch.Tensor,
+        optional_separator_mask: torch.Tensor | None,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+        """Original PyTorch Viterbi implementation used as a fallback."""
         B, T_speech, T_text = log_b.shape
         device = log_b.device
 
@@ -691,7 +881,7 @@ class LinearCRFAligner(nn.Module):
             prev_skip = torch.clamp(j_idx - 2, min=0)
             candidate_prev = torch.stack([prev_stay, prev_adv, prev_skip], dim=0)
 
-        for t in range(1, T_speech):  # forward-recursion with backpointer
+        for t in range(1, T_speech):
             stay, adv, skip = self.__prev_to_current_scores(
                 prev_score=delta_t,
                 optional_separator_mask=optional_separator_mask,
@@ -724,11 +914,6 @@ class LinearCRFAligner(nn.Module):
         batch_idx = torch.arange(B, device=device)
         viterbi_logp = log_delta[batch_idx, spec_lengths - 1, text_lengths - 1]
 
-        # ------------------------------------------------------------------
-        # Backtracking:
-        # Avoid per-frame CUDA .item() synchronization.
-        # Move backptr/lengths to CPU once, then reconstruct the path on CPU.
-        # ------------------------------------------------------------------
         backptr_cpu = backptr.detach().cpu()
         spec_lengths_cpu = spec_lengths.detach().cpu()
         text_lengths_cpu = text_lengths.detach().cpu()
@@ -739,7 +924,7 @@ class LinearCRFAligner(nn.Module):
             dtype=torch.long,
         )
 
-        for b in range(B):  # backtracking
+        for b in range(B):
             t_end = int(spec_lengths_cpu[b]) - 1
             j_cur = int(text_lengths_cpu[b]) - 1
 
