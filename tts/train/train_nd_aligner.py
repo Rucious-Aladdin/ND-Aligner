@@ -344,6 +344,15 @@ class NDAlignerTrainer(
         ):
             self._log_visuals(batch, output, step, prefix="Train")
 
+        if (self.train_time_eval_logger is not None) and (
+            step % self.data_config.extra_exp.train_time_eval_per_step == 0
+        ):
+            self._run_train_time_timit_eval(
+                epoch=epoch,
+                step=step,
+                is_test=False,
+            )
+
     @override
     def validation_step(
         self,
@@ -441,13 +450,6 @@ class NDAlignerTrainer(
                     step,
                     prefix="Valid",
                 )
-
-        if self.train_time_eval_logger is not None:
-            self._run_train_time_timit_eval(
-                epoch=epoch,
-                step=step,
-                is_test=False,
-            )
 
     def _log_visuals(
         self,

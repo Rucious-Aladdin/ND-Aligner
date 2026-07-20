@@ -18,7 +18,7 @@ N_MELS = 80
 HOP_LENGTH = 256
 N_FFT = 1024
 
-DATASETS = ["vctk"]  # , "libritts"]
+DATASETS = ["vctk", "libritts"]
 SEED = 42
 
 
@@ -92,6 +92,7 @@ class DatasetConfigs:
 @dataclass(frozen=True)
 class ExperimentConfigs:
     train_time_eval_logging: bool = True
+    train_time_eval_per_step: int = 2500
 
     base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments"
     exp_name: str = "vctk+libri+full"
@@ -118,7 +119,7 @@ class TrainConfigs:
     val_sanity_check: bool = True
     val_sanity_check_full_epoch: bool = True
     val_interval: int = 1  # epoch-based validataion
-    val_interval_step: int = 500
+    val_interval_step: int = -1
     val_interval_step_skip_hook: bool = False
 
     log_interval: int = 10
@@ -153,10 +154,6 @@ class TrainConfigs:
     keep_best_count: int = 3
     keep_last_count: int = 3
     monitor_loss: str = "recon"  # "recon" ...
-
-    # Viterbi Maximum-path only training
-    viterbi_only_training: bool = False
-    detach_decoder: bool = True
 
 
 @dataclass(frozen=True)

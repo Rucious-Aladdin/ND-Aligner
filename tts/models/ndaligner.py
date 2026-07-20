@@ -29,9 +29,9 @@ def init_nd_aligner(
     if config is None:
         config = NDAlignerConfigs()
 
-    text_encoder = TextEncoder(**dataclasses.asdict(config.txt_enc))
-    spec_encoder = SpecEncoder(**dataclasses.asdict(config.spec_enc))
-    aligner = LinearCRFAligner(**dataclasses.asdict(config.aligner))
+    text_encoder = TextEncoder(**dataclasses.asdict(config.txt_enc)).to(device)
+    spec_encoder = SpecEncoder(**dataclasses.asdict(config.spec_enc)).to(device)
+    aligner = LinearCRFAligner(**dataclasses.asdict(config.aligner)).to(device)
 
     dec_cfg = config.spec_dec
     if config.spec_dec.decoder_type == "conv1d":
@@ -43,7 +43,7 @@ def init_nd_aligner(
             kernel_sizes=dec_cfg.kernel_sizes,
             dilation_base=dec_cfg.dilation_base,
             dropout=dec_cfg.dropout,
-        )
+        ).to(device)
     elif config.spec_dec.decoder_type == "coupling":
         spec_decoder = CouplingDecoder(
             in_channels=dec_cfg.in_channels,
@@ -58,7 +58,7 @@ def init_nd_aligner(
             step_emb_dim=dec_cfg.coupling_step_emb_dim,
             loss_decay_factor=dec_cfg.coupling_loss_decay_factor,
             normalize_loss_weights=dec_cfg.coupling_normalize_loss_weights,
-        )
+        ).to(device)
 
     # for inference
 
@@ -87,7 +87,7 @@ def init_nd_aligner(
         separator_token_id=config.separator_token_id,
     )
 
-    return model.to(device)
+    return model
 
 
 def init_nd_aligner_training_module(
@@ -850,9 +850,6 @@ class NDAligner(BaseModel):
             text_list = list(texts)
 
         model_device = next(self.parameters()).device
-        self.input_maker.to(device=model_device)
-        self.input_maker.device = model_device
-
         batch = self.input_maker.make_with_audio(
             wav_paths=wav_path_list,  # type: ignore
             scripts=text_list,

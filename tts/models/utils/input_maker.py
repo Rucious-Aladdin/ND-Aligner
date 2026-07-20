@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import NamedTuple, override
 
@@ -135,7 +136,7 @@ class AlignerInputMaker(nn.Module):
         self.reduce_noise = bool(reduce_noise)
 
         use_silero_vad = self.zero_nonspeech_region or self.trim_nonspeech_region
-        self.silero_model = load_silero_vad() if use_silero_vad else None
+        self.silero_model = load_silero_vad(onnx=True) if use_silero_vad else None  # FOR SPEED!
 
         if self.preprocess_config.spk_encoder_type == "ecapa-tdnn":
             self.speaker_encoder = ECAPASpeakerEncoder(device=str(self.device))
@@ -278,6 +279,7 @@ class AlignerInputMaker(nn.Module):
             sr=16_000,
             mono=True,
         )
+
         if self.reduce_noise:
             wav_16k_np = nr.reduce_noise(
                 y=wav_16k_np,
@@ -321,31 +323,20 @@ class AlignerInputMaker(nn.Module):
         use_vad = self.zero_nonspeech_region or self.trim_nonspeech_region
 
         if use_vad:
-            vad_tensor = next(
-                self.silero_model.parameters(),  # type: ignore
-                None,
-            )
+            wav_for_vad = wav_16k_cpu.squeeze(0).float().contiguous()
 
-            if vad_tensor is None:
-                vad_tensor = next(
-                    self.silero_model.buffers(),  # type: ignore
-                    None,
+            with torch.inference_mode():
+                speech_regions = get_speech_timestamps(
+                    wav_for_vad,
+                    self.silero_model,
+                    sampling_rate=16_000,
+                    threshold=0.3,
+                    neg_threshold=None,  # type: ignore
+                    min_speech_duration_ms=10,
+                    min_silence_duration_ms=10,
+                    speech_pad_ms=30,
+                    return_seconds=False,
                 )
-
-            vad_device = vad_tensor.device if vad_tensor is not None else torch.device("cpu")
-
-            speech_regions = get_speech_timestamps(
-                wav_16k_cpu.squeeze(0).to(vad_device),
-                self.silero_model,
-                sampling_rate=16_000,
-                threshold=0.3,
-                neg_threshold=None,  # type: ignore
-                min_speech_duration_ms=10,
-                min_silence_duration_ms=10,
-                speech_pad_ms=30,
-                return_seconds=False,
-                window_size_samples=128,
-            )
 
             if speech_regions:
                 speech_start = int(speech_regions[0]["start"])
