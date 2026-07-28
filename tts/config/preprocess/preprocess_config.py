@@ -3,7 +3,7 @@ import os
 import os.path
 from dataclasses import dataclass, field
 
-from tts.global_constant import DATA_PARENT_DIR, SAMPLE_RATE
+from tts.utils.global_constant import DATA_ROOT_DIR, SAMPLE_RATE
 
 # Global root for datasets (base directory for preprocessed data)
 
@@ -21,9 +21,9 @@ def spk_dim() -> int:
 
 @dataclass(frozen=True)
 class PreprocessConfigs:
-    data_root_dir: str = os.path.join(DATA_PARENT_DIR, "LibriTTS", "train-clean-360")
+    data_root_dir: str = os.path.join(DATA_ROOT_DIR, "LibriTTS", "train-clean-360")
     preprocessed_dir: str = os.path.join(
-        DATA_PARENT_DIR,
+        DATA_ROOT_DIR,
         "LibriTTS-preprocessed-trimmed",
         "train-clean-360",
     )

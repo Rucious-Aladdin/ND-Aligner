@@ -68,8 +68,8 @@ def init_nd_aligner(
             preprocess_config=config.preprocess,
             tokenizer_type=config.tokenizer_type,
             fastspeech2_lexicon_path=config.fastspeech2_tokenizer_lexion_path,
-            zero_nonspeech_region=config.preprocess.silence_trim,
-            trim_nonspeech_region=True,
+            zero_nonspeech_region=False,
+            trim_nonspeech_region=False,
             device=device,
         )
     else:
@@ -440,18 +440,18 @@ class NDAligner(BaseModel):
 
         valid_spec_mask = spec_mask.bool()  # (B, T_spec), True = valid
 
+        y_recon_bt = y_recon.transpose(1, 2).contiguous()
+        y_recon_bt = y_recon_bt.to(
+            device=aligned_h.device,
+            dtype=aligned_h.dtype,
+        )
+
         coupling_dec_out = None
         if isinstance(self.spec_decoder, CouplingDecoder):
             # Coupling decoder:
             #   input  : (B, T_spec, C_text)
             #   target : (B, T_spec, n_mels)
             #   output : mel_hat (B, T_spec, n_mels)
-            y_recon_bt = y_recon.transpose(1, 2).contiguous()
-            y_recon_bt = y_recon_bt.to(
-                device=aligned_h.device,
-                dtype=aligned_h.dtype,
-            )
-
             dec_out = self.spec_decoder(
                 x=aligned_h,
                 cond=cond,
@@ -463,33 +463,26 @@ class NDAligner(BaseModel):
             recon_loss = dec_out.loss
             coupling_dec_out = dec_out
         else:
-            # Original Conv1d decoder:
-            #   input  : (B, T_spec, C_text)
-            #   output : expected (B, n_mels, T_spec)
-            recon_bct = self.spec_decoder(
+            recon = self.spec_decoder(
                 x=aligned_h,
                 cond=cond,
                 mask=spec_mask,
-            )
-
-            y_recon = y_recon.to(
-                device=recon_bct.device,
-                dtype=recon_bct.dtype,
-            )
+            )  # (B, T_spec, n_mels)
 
             recon_mask = spec_mask.to(
-                device=recon_bct.device,
-                dtype=recon_bct.dtype,
-            ).unsqueeze(1)
+                device=recon.device,
+                dtype=recon.dtype,
+            ).unsqueeze(
+                -1
+            )  # (B, T_spec, 1)
 
             recon_loss = F.l1_loss(
-                recon_bct * recon_mask,
-                y_recon * recon_mask,
+                recon * recon_mask,
+                y_recon_bt * recon_mask,
                 reduction="sum",
             )
-            recon_loss = recon_loss / (spec_mask.sum() * n_recon_channels).clamp_min(1.0)
 
-            recon = recon_bct.transpose(1, 2)
+            recon_loss = recon_loss / (spec_mask.sum() * n_recon_channels).clamp_min(1.0)
 
         diag_loss = torch.zeros((), device=x.device)
 
@@ -724,6 +717,26 @@ class NDAligner(BaseModel):
             # viterbi-aware features
             viterbi_path=viterbi_path,
             viterbi_logp=viterbi_logp,
+        )
+
+    @torch.inference_mode()
+    def reconstruct(
+        self,
+        aligned_h: torch.Tensor,
+        cond: torch.Tensor,
+        spec_mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        """
+        Returns:
+            mel: (B, T, n_mels)
+        """
+        if self.spec_decoder is None:
+            raise RuntimeError("spec_decoder is not initialized.")
+
+        return self.spec_decoder.inference(
+            x=aligned_h,
+            cond=cond,
+            mask=spec_mask,
         )
 
     def _make_optional_separator_mask(

@@ -12,6 +12,7 @@ import torch
 import torchaudio.functional as AF
 from tqdm import tqdm
 
+from tts.models.modules.coupling_decoder import CouplingDecoder
 from tts.models.modules.hifigan_vocoder import Generator
 from tts.models.ndaligner import AlignerFeatures, NDAligner
 from tts.models.utils.input_maker import AlignerInputMaker
@@ -321,7 +322,7 @@ class TIMITBenchMarker:
                     features=features,
                     spec_mask=spec_mask,
                     ref_wav_tensor=batch.wav_16k,
-                    cond=batch.cond,
+                    cond=cond,
                     device=str(batch.y.device),
                 )
 
@@ -339,7 +340,7 @@ class TIMITBenchMarker:
         features: AlignerFeatures,
         spec_mask: torch.Tensor,
         ref_wav_tensor: torch.Tensor,
-        cond: torch.Tensor | None,
+        cond: torch.Tensor,
         device: str,
     ) -> float:
         def normalize_wav_shape(wav: torch.Tensor) -> torch.Tensor:
@@ -364,13 +365,14 @@ class TIMITBenchMarker:
             features.h_text.transpose(1, 2),
         )  # (B, T_mel, C_text)
 
-        recon_mel = aligner.spec_decoder(
-            x=decoder_input,
+        recon_mel_bt = aligner.reconstruct(
+            aligned_h=decoder_input,
             cond=cond,
-            mask=spec_mask,
-        )  # (B, n_mels, T_mel)
+            spec_mask=spec_mask,
+        )
 
-        hyp_wav = vocoder(recon_mel)
+        hyp_wav = vocoder(recon_mel_bt.transpose(1, 2).contiguous())
+
         hyp_wav = normalize_wav_shape(hyp_wav)
 
         # HiFi-GAN vocoder is assumed to output 22050 Hz.
@@ -425,12 +427,6 @@ class TIMITBenchMarker:
             matched_words.hyp_matched_indices,
             strict=True,
         ):
-            if ref_slice.start is None or ref_slice.stop is None:
-                raise ValueError(f"Invalid ref slice: {ref_slice}")
-
-            if hyp_slice.start is None or hyp_slice.stop is None:
-                raise ValueError(f"Invalid hyp slice: {hyp_slice}")
-
             gt_start = (
                 wrd_segments[ref_slice.start].start_sample / self.ref_audio_sr - start_offset_sec
             )

@@ -196,8 +196,8 @@ class CouplingDecoder(nn.Module):
         if num_refinement_steps < 0:
             raise ValueError(f"num_refinement_steps must be >= 0, got {num_refinement_steps}.")
 
-        if loss_decay_factor <= 0:
-            raise ValueError(f"loss_decay must be > 0, got {loss_decay_factor}.")
+        if loss_decay_factor < 0:
+            raise ValueError(f"loss_decay must be >= 0, got {loss_decay_factor}.")
 
         self.in_channels = in_channels
         self.out_channels = out_channels

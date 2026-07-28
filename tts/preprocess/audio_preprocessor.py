@@ -8,8 +8,6 @@ import torch
 from numpy.typing import NDArray
 from silero_vad import get_speech_timestamps, load_silero_vad
 
-from tts.global_constant import SR_16K
-
 from ..audio.utils.freq_filter import lowpass_filter
 from ..config.preprocess.preprocess_config import PreprocessConfigs
 
@@ -140,7 +138,7 @@ class AudioPreprocessor:
         if len(y) == 0:
             return None
 
-        y_16k = librosa.resample(y, orig_sr=sr, target_sr=SR_16K) if sr != SR_16K else y
+        y_16k = librosa.resample(y, orig_sr=sr, target_sr=16_000) if sr != 16_000 else y
         y_16k_processed = y_16k.astype(np.float32).copy()
 
         if self.denoise_before_vad:
@@ -149,7 +147,7 @@ class AudioPreprocessor:
             if wav_16k_rms > 1e-7:
                 wav_16k_denoised = nr.reduce_noise(
                     y=y_16k_processed,
-                    sr=SR_16K,
+                    sr=16_000,
                     prop_decrease=0.9,
                     n_fft=1024,
                     win_length=1024,
@@ -164,7 +162,7 @@ class AudioPreprocessor:
         if self.lpf_before_vad:
             y_16k_processed = lowpass_filter(
                 x=y_16k_processed,
-                sr=SR_16K,
+                sr=16_000,
                 cutoff_freq=self.lpf_cutoff_freq,
                 order=4,
             )
@@ -174,7 +172,7 @@ class AudioPreprocessor:
         speech_timestamps = get_speech_timestamps(
             wav_tensor,
             self.silero_model,
-            sampling_rate=SR_16K,
+            sampling_rate=16_000,
             threshold=0.5,
             neg_threshold=None,  # type: ignore
             min_speech_duration_ms=0,
@@ -187,7 +185,7 @@ class AudioPreprocessor:
         if not speech_timestamps:
             return None
 
-        ratio = sr / SR_16K
+        ratio = sr / 16_000
         first_start = int(speech_timestamps[0]["start"])
         last_end = int(speech_timestamps[-1]["end"])
 

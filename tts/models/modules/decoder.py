@@ -81,4 +81,17 @@ class Decoder(nn.Module):
         if mask_conv is not None:
             x = x * mask_conv
 
-        return x
+        return x.transpose(1, 2).contiguous()
+
+    @torch.inference_mode()
+    def inference(
+        self,
+        x: torch.Tensor,
+        cond: torch.Tensor,
+        mask: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        return self.forward(
+            x=x,
+            cond=cond,
+            mask=mask,
+        )

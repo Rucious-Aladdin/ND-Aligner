@@ -18,7 +18,7 @@ N_MELS = 80
 HOP_LENGTH = 256
 N_FFT = 1024
 
-DATASETS = ["vctk", "libritts"]
+DATASETS = ["vctk"]
 SEED = 42
 
 
@@ -66,7 +66,8 @@ class DatasetConfigs:
 
     vctk_root: str = os.path.join(DATA_PARENT_DIR, "VCTK-preprocessed-trimmed")
     vctk_test_speakers: list[str] = field(
-        default_factory=lambda: ["p225", "p226", "p227", "p228", "p229", "p232"]
+        # default_factory=lambda: ["p225", "p226", "p227", "p228", "p229", "p232"],
+        default_factory=lambda: [],
     )
 
     libritts_root: str = os.path.join(DATA_PARENT_DIR, "LibriTTS-preprocessed-trimmed")
@@ -92,11 +93,11 @@ class DatasetConfigs:
 @dataclass(frozen=True)
 class ExperimentConfigs:
     train_time_eval_logging: bool = True
-    train_time_eval_per_step: int = 2500
+    train_time_eval_per_step: int = 500
 
     base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments"
-    exp_name: str = "vctk+libri+full"
-    exp_variant: str = "vctk+libri+full"
+    exp_name: str = "vctk+lambda_decay_search"
+    exp_variant: str = "vctk+lambda_decay=1.0"
 
     timit_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TRAIN"
     timit_test_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TEST"
@@ -108,7 +109,7 @@ class ExperimentConfigs:
 class TrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    run_name: str = "nd_aligner_vctk_10ms_coupling_dec"
+    run_name: str = "nd_aligner_vctk_lambda_search"
 
     continue_path: str = ""
     continue_dir: str = ""
@@ -123,11 +124,11 @@ class TrainConfigs:
     val_interval_step_skip_hook: bool = False
 
     log_interval: int = 10
-    img_log_interval: int = 1000
-    save_interval: int = 1000
+    img_log_interval: int = 2500
+    save_interval: int = 2500
 
     # --- Training Loop Limits ---
-    max_epochs: int = 50
+    max_epochs: int = 20
     max_steps: int = 300000  # deprecated
 
     # --- Hardware & Dataloader ---
@@ -174,7 +175,7 @@ class LossConfigs:
     diag_init_weight: float = 10.0
     diag_final_weight: float = 0.0
     diag_start_step: int = 0
-    diag_end_step: int = 15000
+    diag_end_step: int = 30000
 
     # Alignment Viterbi KL Loss Scheduling
     viterbi_kl_init_weight: float = 0.0
