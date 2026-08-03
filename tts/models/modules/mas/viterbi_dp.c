@@ -25,11 +25,11 @@
  * Array layouts (all C-contiguous, row-major):
  *
  *     log_b                     float32  [B, T_speech, T_text]
- *     dp_valid                  uint8    [B, T_speech, T_text]
+ *     mask                  uint8    [B, T_speech, T_text]
  *     initial_delta             float32  [B, T_text]
  *     spec_lengths              int64    [B]
  *     text_lengths              int64    [B]
- *     optional_separator_mask   uint8    [B, T_text], or NULL
+ *     opt_sep_mask   uint8    [B, T_text], or NULL
  *     path                      int64    [B, T_speech]
  *     viterbi_logp              float32  [B]
  *
@@ -39,7 +39,7 @@
  *     advance:  previous state j - 1
  *     skip:     previous state j - 2
  *
- * Skip is allowed only when optional_separator_mask[b, j - 1] is true.
+ * Skip is allowed only when opt_sep_mask[b, j - 1] is true.
  *
  * Tie-breaking exactly follows torch.argmax over candidates ordered as:
  *
@@ -57,11 +57,11 @@
  */
 VITERBI_EXPORT int viterbi_forward_backtrack_f32(
     const float *log_b,
-    const uint8_t *dp_valid,
+    const uint8_t *mask,
     const float *initial_delta,
     const int64_t *spec_lengths,
     const int64_t *text_lengths,
-    const uint8_t *optional_separator_mask,
+    const uint8_t *opt_sep_mask,
     int64_t B,
     int64_t T_speech,
     int64_t T_text,
@@ -135,9 +135,9 @@ VITERBI_EXPORT int viterbi_forward_backtrack_f32(
                 }
 
                 if (
-                    optional_separator_mask != NULL &&
+                    opt_sep_mask != NULL &&
                     j >= 2 &&
-                    optional_separator_mask[
+                    opt_sep_mask[
                         batch_text_offset + (size_t)(j - 1)
                     ] != 0
                 ) {
@@ -152,7 +152,7 @@ VITERBI_EXPORT int viterbi_forward_backtrack_f32(
 
                 const size_t index = time_offset + (size_t)j;
 
-                if (dp_valid[index] != 0) {
+                if (mask[index] != 0) {
                     curr[j] = log_b[index] + best_score;
                 } else {
                     curr[j] = neg_large;

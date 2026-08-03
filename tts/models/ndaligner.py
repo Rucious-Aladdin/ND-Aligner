@@ -594,7 +594,7 @@ class NDAligner(BaseModel):
         text_mask_bool = sequence_mask(x_lengths, x.size(1))
         text_mask = text_mask_bool.unsqueeze(1).to(dtype=y.dtype)
 
-        optional_separator_mask = self._make_optional_separator_mask(
+        opt_sep_mask = self._make_opt_sep_mask(
             x=x,
             x_lengths=x_lengths,
         )
@@ -643,7 +643,7 @@ class NDAligner(BaseModel):
                 h_text=h_text,
                 text_mask=text_mask,
                 cond=cond,
-                optional_separator_mask=optional_separator_mask,
+                opt_sep_mask=opt_sep_mask,
                 return_soft=compute_soft_path,
                 return_hard=True,
             )
@@ -672,7 +672,7 @@ class NDAligner(BaseModel):
                 h_text=h_text,
                 text_mask=text_mask,
                 cond=cond,
-                optional_separator_mask=optional_separator_mask,
+                opt_sep_mask=opt_sep_mask,
                 return_soft=True,
                 return_hard=False,
             )
@@ -739,7 +739,7 @@ class NDAligner(BaseModel):
             mask=spec_mask,
         )
 
-    def _make_optional_separator_mask(
+    def _make_opt_sep_mask(
         self,
         x: torch.Tensor,  # (B, T_text)
         x_lengths: torch.Tensor,  # (B,)
@@ -748,23 +748,23 @@ class NDAligner(BaseModel):
             return None
 
         text_mask = sequence_mask(x_lengths, x.size(1))
-        optional_separator_mask = x.eq(self.separator_token_id) & text_mask
-        optional_separator_mask = optional_separator_mask.clone()
+        opt_sep_mask = x.eq(self.separator_token_id) & text_mask
+        opt_sep_mask = opt_sep_mask.clone()
 
-        if optional_separator_mask.size(1) > 0:
+        if opt_sep_mask.size(1) > 0:
             batch_idx = torch.arange(
-                optional_separator_mask.size(0),
-                device=optional_separator_mask.device,
+                opt_sep_mask.size(0),
+                device=opt_sep_mask.device,
             )
-            last_idx = (x_lengths.to(device=optional_separator_mask.device).long() - 1).clamp_min(0)
+            last_idx = (x_lengths.to(device=opt_sep_mask.device).long() - 1).clamp_min(0)
 
-            optional_separator_mask[:, 0] = False
-            optional_separator_mask[batch_idx, last_idx] = False
+            opt_sep_mask[:, 0] = False
+            opt_sep_mask[batch_idx, last_idx] = False
 
-        if not torch.any(optional_separator_mask):
+        if not torch.any(opt_sep_mask):
             return None
 
-        return optional_separator_mask
+        return opt_sep_mask
 
     @torch.no_grad()
     def _build_spec_encoder_input(
