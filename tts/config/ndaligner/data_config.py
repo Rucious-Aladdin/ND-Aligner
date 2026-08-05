@@ -96,8 +96,8 @@ class ExperimentConfigs:
     train_time_eval_per_step: int = 500
 
     base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments"
-    exp_name: str = "vctk+lambda_decay_search"
-    exp_variant: str = "vctk+lambda_decay=1.0"
+    exp_name: str = "cuda_forward_backward_test"
+    exp_variant: str = "cuda_test"
 
     timit_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TRAIN"
     timit_test_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TEST"
@@ -109,7 +109,7 @@ class ExperimentConfigs:
 class TrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    run_name: str = "nd_aligner_vctk_lambda_search"
+    run_name: str = "nd_aligner_cuda_forward_backward_test"
 
     continue_path: str = ""
     continue_dir: str = ""

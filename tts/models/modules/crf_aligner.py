@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .forward_backward.forward_backward_cuda import MonotoneForwardBackwardCUDA
+
 
 def valid_group_count(channels: int, max_groups: int = 8) -> int:
     for g in range(min(max_groups, channels), 0, -1):
@@ -541,19 +543,183 @@ class LinearCRFAligner(nn.Module):
         torch.Tensor,
     ]:
         """
-        Forward-backward using precomputed log_b.
+        Dispatch forward-backward to the CUDA implementation for CUDA
+        tensors and to the PyTorch implementation for CPU tensors.
 
-        This is used so that hard-only decoding can compute log_b once and skip
-        forward-backward entirely.
+        Args:
+            log_phi:
+                Shape: (B, T_speech, T_text)
+            mask:
+                Shape: (B, T_speech, T_text)
+            spec_lengths:
+                Shape: (B,)
+            text_lengths:
+                Shape: (B,)
+            opt_sep_mask:
+                Shape: (B, T_text), or None
+
+        Returns:
+            gamma:
+                Shape: (B, T_speech, T_text)
+            log_alpha:
+                Shape: (B, T_speech, T_text)
+            log_beta:
+                Shape: (B, T_speech, T_text)
+            log_gamma:
+                Shape: (B, T_speech, T_text)
+            log_z:
+                Shape: (B,)
         """
-        B, T_speech, T_text = log_phi.shape
+        if log_phi.is_cuda:
+            return self.__forward_backward_cuda(
+                log_phi=log_phi,
+                mask=mask,
+                spec_lengths=spec_lengths,
+                text_lengths=text_lengths,
+                opt_sep_mask=opt_sep_mask,
+            )
+
+        return self.__forward_backward_python(
+            log_phi=log_phi,
+            mask=mask,
+            spec_lengths=spec_lengths,
+            text_lengths=text_lengths,
+            opt_sep_mask=opt_sep_mask,
+        )
+
+    def __forward_backward_cuda(
+        self,
+        log_phi: torch.Tensor,
+        mask: torch.Tensor,
+        spec_lengths: torch.Tensor,
+        text_lengths: torch.Tensor,
+        opt_sep_mask: torch.Tensor | None,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        """
+        CUDA forward-backward with custom autograd kernels.
+
+        Args:
+            log_phi:
+                Shape: (B, T_speech, T_text)
+                Dtype: torch.float32
+                Device: CUDA
+            mask:
+                Shape: (B, T_speech, T_text)
+                Dtype: torch.bool
+                Device: CUDA
+            spec_lengths:
+                Shape: (B,)
+            text_lengths:
+                Shape: (B,)
+            opt_sep_mask:
+                Shape: (B, T_text), or None
+                Dtype: torch.bool
+                Device: CUDA
+
+        Returns:
+            gamma:
+                Shape: (B, T_speech, T_text)
+            log_alpha:
+                Shape: (B, T_speech, T_text)
+            log_beta:
+                Shape: (B, T_speech, T_text)
+            log_gamma:
+                Shape: (B, T_speech, T_text)
+            log_z:
+                Shape: (B,)
+        """
+        batch_size = log_phi.size(0)
+
+        # log_alpha, log_beta:
+        # Shape: (B, T_speech, T_text)
+        log_alpha, log_beta = MonotoneForwardBackwardCUDA.apply(  # type: ignore
+            log_phi,
+            mask,
+            opt_sep_mask,
+            float(self.neg_large),
+        )
+
+        # batch_idx:
+        # Shape: (B,)
+        batch_idx = torch.arange(batch_size, device=log_phi.device)
+
+        # log_z:
+        # Shape: (B,)
+        log_z = log_alpha[batch_idx, spec_lengths - 1, text_lengths - 1]
+
+        # log_gamma:
+        # Shape: (B, T_speech, T_text)
+        log_gamma = log_alpha + log_beta - log_z.view(batch_size, 1, 1)
+        log_gamma = log_gamma.masked_fill(~mask, self.neg_large)
+
+        # gamma:
+        # Shape: (B, T_speech, T_text)
+        gamma = torch.exp(log_gamma).masked_fill(~mask, 0.0)
+
+        return (
+            gamma,
+            log_alpha,
+            log_beta,
+            log_gamma,
+            log_z,
+        )
+
+    def __forward_backward_python(
+        self,
+        log_phi: torch.Tensor,
+        mask: torch.Tensor,
+        spec_lengths: torch.Tensor,
+        text_lengths: torch.Tensor,
+        opt_sep_mask: torch.Tensor | None,
+    ) -> tuple[
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+        torch.Tensor,
+    ]:
+        """
+        PyTorch forward-backward reference implementation.
+
+        Args:
+            log_phi:
+                Shape: (B, T_speech, T_text)
+            mask:
+                Shape: (B, T_speech, T_text)
+            spec_lengths:
+                Shape: (B,)
+            text_lengths:
+                Shape: (B,)
+            opt_sep_mask:
+                Shape: (B, T_text), or None
+
+        Returns:
+            gamma:
+                Shape: (B, T_speech, T_text)
+            log_alpha:
+                Shape: (B, T_speech, T_text)
+            log_beta:
+                Shape: (B, T_speech, T_text)
+            log_gamma:
+                Shape: (B, T_speech, T_text)
+            log_z:
+                Shape: (B,)
+        """
+        batch_size, speech_size, text_size = log_phi.shape
         device = log_phi.device
 
-        # ------------------------------------------------------------------
-        # Forward
-        # ------------------------------------------------------------------
+        # log_alpha_steps[t]:
+        # Shape: (B, T_text)
         log_alpha_steps: list[torch.Tensor] = []
 
+        # alpha_t:
+        # Shape: (B, T_text)
         alpha_t = self.__initial_dp_score(
             log_b=log_phi,
             mask=mask,
@@ -561,89 +727,176 @@ class LinearCRFAligner(nn.Module):
         )
         log_alpha_steps.append(alpha_t)
 
-        for t in range(1, T_speech):
+        for speech_idx in range(1, speech_size):
+            # stay, adv:
+            # Shape: (B, T_text)
+            # skip:
+            # Shape: (B, T_text), or None
             stay, adv, skip = self.__forward_recusion(
                 prev_score=alpha_t,
                 opt_sep_mask=opt_sep_mask,
             )
+
             if skip is None:
+                # prev_sum:
+                # Shape: (B, T_text)
                 prev_sum = torch.logaddexp(stay, adv)
             else:
-                prev_sum = torch.logaddexp(torch.logaddexp(stay, adv), skip)
+                # prev_sum:
+                # Shape: (B, T_text)
+                prev_sum = torch.logaddexp(
+                    torch.logaddexp(stay, adv),
+                    skip,
+                )
 
-            alpha_t = log_phi[:, t, :] + prev_sum
-            alpha_t = alpha_t.masked_fill(~mask[:, t, :], self.neg_large)
+            # alpha_t:
+            # Shape: (B, T_text)
+            alpha_t = log_phi[:, speech_idx, :] + prev_sum
+            alpha_t = alpha_t.masked_fill(
+                ~mask[:, speech_idx, :],
+                self.neg_large,
+            )
 
             log_alpha_steps.append(alpha_t)
 
-        log_alpha = torch.stack(log_alpha_steps, dim=1)
+        # log_alpha:
+        # Shape: (B, T_speech, T_text)
+        log_alpha = torch.stack(
+            log_alpha_steps,
+            dim=1,
+        )
 
-        # ------------------------------------------------------------------
-        # Backward
-        # ------------------------------------------------------------------
-        log_beta_steps: list[torch.Tensor | None] = [None] * T_speech
+        # log_beta_steps[t]:
+        # Shape: (B, T_text), or None before assignment
+        log_beta_steps: list[torch.Tensor | None] = [None] * speech_size
+
+        # beta_next:
+        # Shape: (B, T_text), or None
         beta_next: torch.Tensor | None = None
 
-        j = torch.arange(T_text, device=device).view(1, T_text)
-        terminal_state = j == (text_lengths - 1).view(B, 1)
+        # text_idx:
+        # Shape: (1, T_text)
+        text_idx = torch.arange(
+            text_size,
+            device=device,
+        ).view(1, text_size)
 
-        for t in range(T_speech - 1, -1, -1):
-            base = log_phi.new_full((B, T_text), self.neg_large)
+        # terminal_state:
+        # Shape: (B, T_text)
+        terminal_state = text_idx == (text_lengths - 1).view(batch_size, 1)
 
-            terminal_batches = (spec_lengths - 1) == t
+        for speech_idx in range(
+            speech_size - 1,
+            -1,
+            -1,
+        ):
+            # base:
+            # Shape: (B, T_text)
+            base = log_phi.new_full(
+                (batch_size, text_size),
+                self.neg_large,
+            )
+
+            # terminal_batches:
+            # Shape: (B,)
+            terminal_batches = (spec_lengths - 1) == speech_idx
+
             base = torch.where(
-                terminal_batches.view(B, 1) & terminal_state,
+                terminal_batches.view(batch_size, 1) & terminal_state,
                 torch.zeros_like(base),
                 base,
             )
 
-            if t == T_speech - 1:
+            if speech_idx == speech_size - 1:
+                # beta_t:
+                # Shape: (B, T_text)
                 beta_t = base
             else:
                 assert beta_next is not None
 
-                next_score = log_phi[:, t + 1, :] + beta_next
+                # next_score:
+                # Shape: (B, T_text)
+                next_score = log_phi[:, speech_idx + 1, :] + beta_next
 
+                # stay, adv:
+                # Shape: (B, T_text)
+                # skip:
+                # Shape: (B, T_text), or None
                 stay, adv, skip = self.__backward_recusion(
                     next_score=next_score,
                     opt_sep_mask=opt_sep_mask,
                 )
 
                 if skip is None:
-                    recursive = torch.logaddexp(stay, adv)
+                    # recursive:
+                    # Shape: (B, T_text)
+                    recursive = torch.logaddexp(
+                        stay,
+                        adv,
+                    )
                 else:
-                    recursive = torch.logaddexp(torch.logaddexp(stay, adv), skip)
+                    # recursive:
+                    # Shape: (B, T_text)
+                    recursive = torch.logaddexp(
+                        torch.logaddexp(stay, adv),
+                        skip,
+                    )
 
+                # beta_t:
+                # Shape: (B, T_text)
                 beta_t = torch.where(
-                    terminal_batches.view(B, 1),
+                    terminal_batches.view(
+                        batch_size,
+                        1,
+                    ),
                     base,
                     recursive,
                 )
 
-            beta_t = beta_t.masked_fill(~mask[:, t, :], self.neg_large)
+            beta_t = beta_t.masked_fill(
+                ~mask[:, speech_idx, :],
+                self.neg_large,
+            )
 
-            log_beta_steps[t] = beta_t
+            log_beta_steps[speech_idx] = beta_t
             beta_next = beta_t
 
-        log_beta = torch.stack(log_beta_steps, dim=1)  # type: ignore[arg-type]
-
-        batch_idx = torch.arange(B, device=device)
-        log_z = log_alpha[batch_idx, spec_lengths - 1, text_lengths - 1]
-
-        raw_log_gamma = log_alpha + log_beta - log_z.view(B, 1, 1)
-        raw_log_gamma = raw_log_gamma.masked_fill(~mask, self.neg_large)
-
-        valid_frame = mask.any(dim=-1, keepdim=True)
-        row_log_norm = torch.logsumexp(raw_log_gamma, dim=-1, keepdim=True)
-
-        log_gamma = torch.where(
-            valid_frame,
-            raw_log_gamma - row_log_norm,
-            raw_log_gamma,
+        # log_beta:
+        # Shape: (B, T_speech, T_text)
+        log_beta = torch.stack(
+            log_beta_steps,  # type: ignore[arg-type]
+            dim=1,
         )
-        log_gamma = log_gamma.masked_fill(~mask, self.neg_large)
 
-        gamma = torch.exp(log_gamma).masked_fill(~mask, 0.0)
+        # batch_idx:
+        # Shape: (B,)
+        batch_idx = torch.arange(
+            batch_size,
+            device=device,
+        )
+
+        # log_z:
+        # Shape: (B,)
+        log_z = log_alpha[
+            batch_idx,
+            spec_lengths - 1,
+            text_lengths - 1,
+        ]
+
+        # log_gamma:
+        # Shape: (B, T_speech, T_text)
+        log_gamma = log_alpha + log_beta - log_z.view(batch_size, 1, 1)
+        log_gamma = log_gamma.masked_fill(
+            ~mask,
+            self.neg_large,
+        )
+
+        # gamma:
+        # Shape: (B, T_speech, T_text)
+        gamma = torch.exp(log_gamma).masked_fill(
+            ~mask,
+            0.0,
+        )
 
         return (
             gamma,

@@ -7,6 +7,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from .forward_backward.forward_backward_cuda import MonotoneForwardBackwardCUDA
+
 
 def valid_group_count(channels: int, max_groups: int = 8) -> int:
     for g in range(min(max_groups, channels), 0, -1):
@@ -271,7 +273,13 @@ logger = logging.getLogger(__name__)
 
 
 def _load_viterbi_library() -> ctypes.CDLL:
-    """Load and configure the local C Viterbi shared library once."""
+    """
+    Load and configure the local C Viterbi shared library once.
+
+    RUN THIS:
+        $ gcc -O3 -march=native -fPIC -shared viterbi_dp.c -o viterbi_dp.so
+
+    """
     global _VITERBI_LIBRARY
     global _VITERBI_LIBRARY_ERROR
 
@@ -359,7 +367,6 @@ class LinearCRFAligner(nn.Module):
 
         self.unary_support_type = unary_support_type
         self.unary_temperature = float(unary_temperature)
-
         self.unary_predictor = NodePotentialPredictor(
             dim_spec=dim_spec,
             dim_text=dim_text,
@@ -420,84 +427,28 @@ class LinearCRFAligner(nn.Module):
 
         spec_mask_f = spec_mask.unsqueeze(1).to(dtype=h_spec.dtype)
         text_mask_f = text_mask.unsqueeze(1).to(dtype=h_text.dtype)
-
         h_spec = h_spec * spec_mask_f
         h_text = h_text * text_mask_f
 
-        raw_unary = self.unary_predictor(
+        raw_evidence = self.unary_predictor(
             h_spec=h_spec,
             h_text=h_text,
             cond=cond,
         )  # (B, T_s, T_t)
 
-        _, T_speech, T_text = raw_unary.shape
-        device = raw_unary.device
-
-        length_valid = spec_mask.unsqueeze(2) & text_mask.unsqueeze(1)
-
-        if opt_sep_mask is None:
-            reachable = self._strict_reachability_mask(
-                spec_lengths=spec_lengths,
-                text_lengths=text_lengths,
-                T_speech=T_speech,
-                T_text=T_text,
-                device=device,
-            )
-        else:
-            reachable = self._optional_separator_reachability_mask(
-                spec_lengths=spec_lengths,
-                text_lengths=text_lengths,
-                opt_sep_mask=opt_sep_mask,
-                T_speech=T_speech,
-                T_text=T_text,
-                device=device,
-            )
-
-        batch_idx = torch.arange(
-            spec_lengths.size(0),
-            device=device,
-        )
-
-        has_valid_path = reachable[
-            batch_idx,
-            spec_lengths - 1,
-            text_lengths - 1,
-        ]
-
-        if not torch.all(has_valid_path) and opt_sep_mask is not None:
-            invalid_batches = torch.nonzero(
-                ~has_valid_path,
-                as_tuple=False,
-            ).flatten()
-
-            details = [
-                {
-                    "batch": int(b),
-                    "spec_length": int(spec_lengths[b]),
-                    "text_length": int(text_lengths[b]),
-                    "optional_count": int(opt_sep_mask[b, : text_lengths[b]].sum()),
-                }
-                for b in invalid_batches.detach().cpu().tolist()
-            ]
-
-            raise ValueError(
-                "No valid monotone path exists under the optional-separator "
-                + f"topology. Invalid samples: {details}"
-            )
-
-        dp_valid = length_valid & reachable
-
-        masked_raw_unary = raw_unary.masked_fill(
-            ~dp_valid,
+        dp_mask = spec_mask.unsqueeze(2) & text_mask.unsqueeze(1)
+        masked_raw_evidence = raw_evidence.new_full(
+            raw_evidence.shape,
             self.neg_large,
         )
+        masked_raw_evidence[dp_mask] = raw_evidence[dp_mask]
 
         # ------------------------------------------------------------
         # Compute log_b. Both soft forward-backward and Viterbi use it.
         # ------------------------------------------------------------
-        log_b = self._compute_log_node_potential(
-            evidence=raw_unary,
-            unary_valid=length_valid,
+        log_phi = self._compute_log_node_potential(
+            evidence=raw_evidence,
+            mask=dp_mask,
         ).contiguous()
 
         # ------------------------------------------------------------
@@ -511,20 +462,20 @@ class LinearCRFAligner(nn.Module):
                 log_gamma,
                 raw_log_z,
             ) = self._forward_backward(
-                log_b=log_b,
-                dp_valid=dp_valid,
+                log_phi=log_phi,
+                mask=dp_mask,
                 spec_lengths=spec_lengths,
                 text_lengths=text_lengths,
                 opt_sep_mask=opt_sep_mask,
             )
 
-            gamma = gamma.masked_fill(~dp_valid, 0.0)
+            gamma = gamma.masked_fill(~dp_mask, 0.0)
             durations = gamma.sum(dim=1)
 
             if self.unary_support_type == "bernoulli":
                 bernoulli_penalty = self.__bernoulli_negative_penalty(
-                    evidence=raw_unary,
-                    penalty_valid=dp_valid,
+                    evidence=raw_evidence,
+                    mask=dp_mask,
                 )
                 raw_log_z = raw_log_z - bernoulli_penalty
 
@@ -547,9 +498,9 @@ class LinearCRFAligner(nn.Module):
             log_gamma,
             raw_log_z,
             norm_log_z,
-            raw_unary,
-            masked_raw_unary,
-            log_b,
+            raw_evidence,
+            masked_raw_evidence,
+            log_phi,
             durations,
         )
 
@@ -557,8 +508,8 @@ class LinearCRFAligner(nn.Module):
             return base_outputs
 
         hard_gamma, hard_durations, viterbi_path, viterbi_logp = self._viterbi_decode(
-            log_b=log_b,
-            dp_valid=dp_valid,
+            log_b=log_phi,
+            dp_valid=dp_mask,
             spec_lengths=spec_lengths,
             text_lengths=text_lengths,
             opt_sep_mask=opt_sep_mask,
@@ -579,8 +530,8 @@ class LinearCRFAligner(nn.Module):
 
     def _forward_backward(
         self,
-        log_b: torch.Tensor,
-        dp_valid: torch.Tensor,
+        log_phi: torch.Tensor,
+        mask: torch.Tensor,
         spec_lengths: torch.Tensor,
         text_lengths: torch.Tensor,
         opt_sep_mask: torch.Tensor | None,
@@ -597,8 +548,8 @@ class LinearCRFAligner(nn.Module):
         This is used so that hard-only decoding can compute log_b once and skip
         forward-backward entirely.
         """
-        B, T_speech, T_text = log_b.shape
-        device = log_b.device
+        B, T_speech, T_text = log_phi.shape
+        device = log_phi.device
 
         # ------------------------------------------------------------------
         # Forward
@@ -606,14 +557,14 @@ class LinearCRFAligner(nn.Module):
         log_alpha_steps: list[torch.Tensor] = []
 
         alpha_t = self.__initial_dp_score(
-            log_b=log_b,
-            dp_valid=dp_valid,
+            log_b=log_phi,
+            mask=mask,
             opt_sep_mask=opt_sep_mask,
         )
         log_alpha_steps.append(alpha_t)
 
         for t in range(1, T_speech):
-            stay, adv, skip = self.__prev_to_current_scores(
+            stay, adv, skip = self.__forward_recusion(
                 prev_score=alpha_t,
                 opt_sep_mask=opt_sep_mask,
             )
@@ -622,8 +573,8 @@ class LinearCRFAligner(nn.Module):
             else:
                 prev_sum = torch.logaddexp(torch.logaddexp(stay, adv), skip)
 
-            alpha_t = log_b[:, t, :] + prev_sum
-            alpha_t = alpha_t.masked_fill(~dp_valid[:, t, :], self.neg_large)
+            alpha_t = log_phi[:, t, :] + prev_sum
+            alpha_t = alpha_t.masked_fill(~mask[:, t, :], self.neg_large)
 
             log_alpha_steps.append(alpha_t)
 
@@ -639,7 +590,7 @@ class LinearCRFAligner(nn.Module):
         terminal_state = j == (text_lengths - 1).view(B, 1)
 
         for t in range(T_speech - 1, -1, -1):
-            base = log_b.new_full((B, T_text), self.neg_large)
+            base = log_phi.new_full((B, T_text), self.neg_large)
 
             terminal_batches = (spec_lengths - 1) == t
             base = torch.where(
@@ -653,9 +604,9 @@ class LinearCRFAligner(nn.Module):
             else:
                 assert beta_next is not None
 
-                next_score = log_b[:, t + 1, :] + beta_next
+                next_score = log_phi[:, t + 1, :] + beta_next
 
-                stay, adv, skip = self.__current_to_next_scores(
+                stay, adv, skip = self.__backward_recusion(
                     next_score=next_score,
                     opt_sep_mask=opt_sep_mask,
                 )
@@ -671,7 +622,7 @@ class LinearCRFAligner(nn.Module):
                     recursive,
                 )
 
-            beta_t = beta_t.masked_fill(~dp_valid[:, t, :], self.neg_large)
+            beta_t = beta_t.masked_fill(~mask[:, t, :], self.neg_large)
 
             log_beta_steps[t] = beta_t
             beta_next = beta_t
@@ -681,20 +632,10 @@ class LinearCRFAligner(nn.Module):
         batch_idx = torch.arange(B, device=device)
         log_z = log_alpha[batch_idx, spec_lengths - 1, text_lengths - 1]
 
-        raw_log_gamma = log_alpha + log_beta - log_z.view(B, 1, 1)
-        raw_log_gamma = raw_log_gamma.masked_fill(~dp_valid, self.neg_large)
+        log_gamma = log_alpha + log_beta - log_z.view(B, 1, 1)
+        log_gamma = log_gamma.masked_fill(~mask, self.neg_large)
 
-        valid_frame = dp_valid.any(dim=-1, keepdim=True)
-        row_log_norm = torch.logsumexp(raw_log_gamma, dim=-1, keepdim=True)
-
-        log_gamma = torch.where(
-            valid_frame,
-            raw_log_gamma - row_log_norm,
-            raw_log_gamma,
-        )
-        log_gamma = log_gamma.masked_fill(~dp_valid, self.neg_large)
-
-        gamma = torch.exp(log_gamma).masked_fill(~dp_valid, 0.0)
+        gamma = torch.exp(log_gamma).masked_fill(~mask, 0.0)
 
         return (
             gamma,
@@ -724,7 +665,7 @@ class LinearCRFAligner(nn.Module):
         try:
             return self.__viterbi_decode_c(
                 log_b=log_b,
-                dp_valid=dp_valid,
+                mask=dp_valid,
                 spec_lengths=spec_lengths,
                 text_lengths=text_lengths,
                 opt_sep_mask=opt_sep_mask,
@@ -747,7 +688,7 @@ class LinearCRFAligner(nn.Module):
     def __viterbi_decode_c(
         self,
         log_b: torch.Tensor,
-        dp_valid: torch.Tensor,
+        mask: torch.Tensor,
         spec_lengths: torch.Tensor,
         text_lengths: torch.Tensor,
         opt_sep_mask: torch.Tensor | None,
@@ -761,23 +702,23 @@ class LinearCRFAligner(nn.Module):
 
         # The C ABI is fixed to float32, uint8, and int64.
         log_b_cpu = log_b.detach().to(device="cpu", dtype=torch.float32).contiguous()
-        dp_valid_cpu = dp_valid.detach().to(device="cpu", dtype=torch.uint8).contiguous()
+        mask_cpu = mask.detach().to(device="cpu", dtype=torch.uint8).contiguous()
         spec_lengths_cpu = spec_lengths.detach().to(device="cpu", dtype=torch.int64).contiguous()
         text_lengths_cpu = text_lengths.detach().to(device="cpu", dtype=torch.int64).contiguous()
 
         if opt_sep_mask is None:
             opt_sep_mask_cpu = None
-            optional_separator_pointer = ctypes.c_void_p()
+            opt_sep_pointer = ctypes.c_void_p()
         else:
             opt_sep_mask_cpu = (
                 opt_sep_mask.detach().to(device="cpu", dtype=torch.uint8).contiguous()
             )
-            optional_separator_pointer = ctypes.c_void_p(opt_sep_mask_cpu.data_ptr())
+            opt_sep_pointer = ctypes.c_void_p(opt_sep_mask_cpu.data_ptr())
 
         initial_delta_cpu = (
             self.__initial_dp_score(
                 log_b=log_b_cpu,
-                dp_valid=dp_valid_cpu.bool(),
+                mask=mask_cpu.bool(),
                 opt_sep_mask=(None if opt_sep_mask_cpu is None else opt_sep_mask_cpu.bool()),
             )
             .to(dtype=torch.float32)
@@ -797,11 +738,11 @@ class LinearCRFAligner(nn.Module):
 
         status = function(
             ctypes.c_void_p(log_b_cpu.data_ptr()),
-            ctypes.c_void_p(dp_valid_cpu.data_ptr()),
+            ctypes.c_void_p(mask_cpu.data_ptr()),
             ctypes.c_void_p(initial_delta_cpu.data_ptr()),
             ctypes.c_void_p(spec_lengths_cpu.data_ptr()),
             ctypes.c_void_p(text_lengths_cpu.data_ptr()),
-            optional_separator_pointer,
+            opt_sep_pointer,
             ctypes.c_int64(B),
             ctypes.c_int64(T_speech),
             ctypes.c_int64(T_text),
@@ -823,7 +764,7 @@ class LinearCRFAligner(nn.Module):
         j_idx = path.clamp_min(0)
 
         hard_attn[b_idx[valid_t], t_idx[valid_t], j_idx[valid_t]] = 1.0
-        hard_attn = hard_attn.masked_fill(~dp_valid, 0.0)
+        hard_attn = hard_attn.masked_fill(~mask, 0.0)
         hard_durations = hard_attn.sum(dim=1)
 
         # Recompute the selected path score from log_b so viterbi_logp keeps
@@ -861,7 +802,7 @@ class LinearCRFAligner(nn.Module):
 
         delta_t = self.__initial_dp_score(
             log_b=log_b,
-            dp_valid=dp_valid,
+            mask=dp_valid,
             opt_sep_mask=opt_sep_mask,
         )
         delta_steps.append(delta_t)
@@ -877,7 +818,7 @@ class LinearCRFAligner(nn.Module):
             candidate_prev = torch.stack([prev_stay, prev_adv, prev_skip], dim=0)
 
         for t in range(1, T_speech):
-            stay, adv, skip = self.__prev_to_current_scores(
+            stay, adv, skip = self.__forward_recusion(
                 prev_score=delta_t,
                 opt_sep_mask=opt_sep_mask,
             )
@@ -948,7 +889,7 @@ class LinearCRFAligner(nn.Module):
     def _compute_log_node_potential(
         self,
         evidence: torch.Tensor,  # (B, T_s, T_t)
-        unary_valid: torch.Tensor,  # (B, T_s, T_t)
+        mask: torch.Tensor,  # (B, T_s, T_t)
     ) -> torch.Tensor:
         """
         Compute unary log potential log_b[t, j].
@@ -968,12 +909,12 @@ class LinearCRFAligner(nn.Module):
         if self.unary_support_type in ("raw", "bernoulli"):
             temperature = max(float(self.unary_temperature), 1e-6)
             score = evidence / temperature
-            return score.masked_fill(~unary_valid, self.neg_large)
+            return score.masked_fill(~mask, self.neg_large)
 
         if self.unary_support_type == "global":
             return self.__log_softmax_normalization(
                 evidence=evidence,
-                unary_valid=unary_valid,
+                mask=mask,
             )
 
         raise RuntimeError(f"Unexpected unary_support_type: {self.unary_support_type!r}")
@@ -981,7 +922,7 @@ class LinearCRFAligner(nn.Module):
     def __log_softmax_normalization(
         self,
         evidence: torch.Tensor,
-        unary_valid: torch.Tensor,
+        mask: torch.Tensor,
     ) -> torch.Tensor:
         """
         classification for text-axis
@@ -1006,7 +947,7 @@ class LinearCRFAligner(nn.Module):
 
         score = evidence / temperature
 
-        score_for_norm = score.masked_fill(~unary_valid, self.neg_large)
+        score_for_norm = score.masked_fill(~mask, self.neg_large)
 
         log_denom = torch.logsumexp(
             score_for_norm,
@@ -1015,14 +956,14 @@ class LinearCRFAligner(nn.Module):
         )
 
         log_phi = score - log_denom
-        log_phi = log_phi.masked_fill(~unary_valid, self.neg_large)
+        log_phi = log_phi.masked_fill(~mask, self.neg_large)
 
         return log_phi
 
     def __bernoulli_negative_penalty(
         self,
         evidence: torch.Tensor,
-        penalty_valid: torch.Tensor,
+        mask: torch.Tensor,
     ) -> torch.Tensor:
         """
         Path-independent negative-cell penalty for the full Bernoulli emission
@@ -1047,14 +988,14 @@ class LinearCRFAligner(nn.Module):
         score = evidence / temperature
 
         penalty = F.softplus(score)
-        penalty = penalty.masked_fill(~penalty_valid, 0.0)
+        penalty = penalty.masked_fill(~mask, 0.0)
 
         return penalty.sum(dim=(1, 2))  # (B,)
 
     def __initial_dp_score(
         self,
         log_b: torch.Tensor,
-        dp_valid: torch.Tensor,
+        mask: torch.Tensor,
         opt_sep_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
@@ -1087,13 +1028,13 @@ class LinearCRFAligner(nn.Module):
             )
 
         score = score.masked_fill(
-            ~dp_valid[:, 0, :],
+            ~mask[:, 0, :],
             self.neg_large,
         )
 
         return score
 
-    def __prev_to_current_scores(
+    def __forward_recusion(
         self,
         prev_score: torch.Tensor,
         opt_sep_mask: torch.Tensor | None = None,
@@ -1145,7 +1086,7 @@ class LinearCRFAligner(nn.Module):
 
         return stay, adv, skip
 
-    def __current_to_next_scores(
+    def __backward_recusion(
         self,
         next_score: torch.Tensor,
         opt_sep_mask: torch.Tensor | None = None,
@@ -1205,154 +1146,3 @@ class LinearCRFAligner(nn.Module):
         if torch.get_default_dtype() in (torch.float16, torch.bfloat16):
             return -1e4
         return -1e9
-
-    @staticmethod
-    def _strict_reachability_mask(
-        spec_lengths: torch.Tensor,  # (B,)
-        text_lengths: torch.Tensor,  # (B,)
-        T_speech: int,
-        T_text: int,
-        device: torch.device,
-    ) -> torch.Tensor:
-        """
-        Reachability mask for positive-duration strict monotone paths.
-
-        A state j at frame t is valid if:
-          1. j can be reached from state 0 by time t.
-          2. final state N - 1 can still be reached by final frame T - 1.
-
-        Zero-indexed:
-            z_0 = 0
-            z_{T-1} = N-1
-            z_{t+1} in {z_t, z_t + 1}
-        """
-        t = torch.arange(T_speech, device=device).view(1, T_speech, 1)
-        j = torch.arange(T_text, device=device).view(1, 1, T_text)
-
-        T = spec_lengths.view(-1, 1, 1)
-        N = text_lengths.view(-1, 1, 1)
-
-        reachable_from_start = j <= t
-        completable_to_end = (N - 1 - j) <= (T - 1 - t)
-
-        within_lengths = (t < T) & (j < N)
-
-        return reachable_from_start & completable_to_end & within_lengths
-
-    @staticmethod
-    def _optional_separator_reachability_mask(
-        spec_lengths: torch.Tensor,  # (B,)
-        text_lengths: torch.Tensor,  # (B,)
-        opt_sep_mask: torch.Tensor,  # (B, T_text)
-        T_speech: int,
-        T_text: int,
-        device: torch.device,
-    ) -> torch.Tensor:
-        """
-        Reachability mask for monotone paths with optional separator skips.
-
-        Allowed transitions:
-            j -> j      stay
-            j -> j + 1  advance
-            j -> j + 2  skip token j + 1, iff that token is optional
-
-        Initial states:
-            z_0 = 0
-            z_0 = 1, iff token 0 is optional
-
-        The terminal state remains fixed to text_lengths[b] - 1.
-        """
-        B = spec_lengths.size(0)
-        inf = torch.iinfo(torch.long).max // 4
-
-        min_prefix = torch.full(
-            (B, T_text),
-            fill_value=inf,
-            dtype=torch.long,
-            device=device,
-        )
-
-        min_prefix[:, 0] = 1
-
-        if T_text >= 2:
-            min_prefix[:, 1] = torch.where(
-                opt_sep_mask[:, 0],
-                torch.ones(B, dtype=torch.long, device=device),
-                torch.full(
-                    (B,),
-                    2,
-                    dtype=torch.long,
-                    device=device,
-                ),
-            )
-
-        for j in range(2, T_text):
-            # Normal advance:
-            normal_cost = min_prefix[:, j - 1] + 1
-
-            # Optional skip:
-            skip_cost = min_prefix[:, j - 2] + 1
-            skip_allowed = opt_sep_mask[:, j - 1]
-
-            min_prefix[:, j] = torch.where(
-                skip_allowed,
-                torch.minimum(normal_cost, skip_cost),
-                normal_cost,
-            )
-
-        min_suffix = torch.full(
-            (B, T_text),
-            fill_value=inf,
-            dtype=torch.long,
-            device=device,
-        )
-
-        batch_idx = torch.arange(B, device=device)
-        final_j = text_lengths - 1
-
-        min_suffix[batch_idx, final_j] = 1
-
-        for j in range(T_text - 2, -1, -1):
-            update_mask = j < final_j
-
-            # Normal advance:
-            normal_cost = min_suffix[:, j + 1] + 1
-            best_cost = normal_cost
-
-            # Optional skip:
-            if j + 2 < T_text:
-                skip_cost = min_suffix[:, j + 2] + 1
-                skip_allowed = opt_sep_mask[:, j + 1]
-
-                best_cost = torch.where(
-                    skip_allowed,
-                    torch.minimum(normal_cost, skip_cost),
-                    normal_cost,
-                )
-
-            min_suffix[:, j] = torch.where(
-                update_mask,
-                best_cost,
-                min_suffix[:, j],
-            )
-
-        t = torch.arange(
-            T_speech,
-            device=device,
-        ).view(1, T_speech, 1)
-
-        j = torch.arange(
-            T_text,
-            device=device,
-        ).view(1, 1, T_text)
-
-        T = spec_lengths.view(B, 1, 1)
-        N = text_lengths.view(B, 1, 1)
-
-        within_lengths = (t < T) & (j < N)
-
-        reachable_from_start = (min_prefix.view(B, 1, T_text) - 1) <= t
-
-        completable_to_end = (min_suffix.view(B, 1, T_text) - 1) <= (T - 1 - t)
-
-        return within_lengths & reachable_from_start & completable_to_end
