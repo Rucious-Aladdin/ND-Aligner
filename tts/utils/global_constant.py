@@ -1,2 +1,2 @@
-SAMPLE_RATE = 22_050
+SAMPLE_RATE = 16_000
 DATA_ROOT_DIR = "/shared/data_zfs/blue2959"

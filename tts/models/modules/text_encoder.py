@@ -4,8 +4,8 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from tts.models.layers.film_blocks import FiLMLayer, FiLMResidualBlock
-from tts.models.layers.pos_encoding import PositionalEncoding1d
+from tts.models.modules.layers.film_blocks import FiLMResidualBlock
+from tts.models.modules.utils.pos_encoding import PositionalEncoding1d
 
 
 class Conv1dBlock(nn.Module):

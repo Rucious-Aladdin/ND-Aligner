@@ -11,9 +11,7 @@ SPK_ENCODER_TYPE = "resemblyzer"
 
 
 def spk_dim() -> int:
-    if SPK_ENCODER_TYPE == "ecapa-tdnn":  # type: ignore
-        return 192
-    elif SPK_ENCODER_TYPE == "resemblyzer":
+    if SPK_ENCODER_TYPE == "resemblyzer":
         return 256
     else:
         raise ValueError()
@@ -21,12 +19,8 @@ def spk_dim() -> int:
 
 @dataclass(frozen=True)
 class PreprocessConfigs:
-    data_root_dir: str = os.path.join(DATA_ROOT_DIR, "LibriTTS", "train-clean-360")
-    preprocessed_dir: str = os.path.join(
-        DATA_ROOT_DIR,
-        "LibriTTS-preprocessed-trimmed",
-        "train-clean-360",
-    )
+    data_root_dir: str = os.path.join(DATA_ROOT_DIR, "LibriTTS")
+    preprocessed_dir: str = os.path.join(DATA_ROOT_DIR, "LibriTTS-preprocessed-trimmed-16k")
     spk_encoder_type: str = SPK_ENCODER_TYPE
     spk_embedding_dim: int = field(default_factory=spk_dim)
 

@@ -14,7 +14,7 @@ from tts.audio.mel_spectrogram import MelSpecExtractor
 from tts.audio.utils.suppress_impulsive_peaks import suppress_impulsive_peaks
 from tts.config.ndaligner.data_config import AudioConfigs
 from tts.config.preprocess.preprocess_config import PreprocessConfigs
-from tts.models.modules.spk_encoder import ECAPASpeakerEncoder, ResemblyzerSpeakerEncoder
+from tts.models.modules.spk_encoder import ResemblyzerSpeakerEncoder
 from tts.models.utils.lev_words_mapper import LevensteinWordsMapper
 from tts.tokenizer.load_tokenizer import load_tokenizer
 
@@ -137,9 +137,7 @@ class AlignerInputMaker(nn.Module):
         use_silero_vad = self.zero_nonspeech_region or self.trim_nonspeech_region
         self.silero_model = load_silero_vad(onnx=True) if use_silero_vad else None  # FOR SPEED!
 
-        if self.preprocess_config.spk_encoder_type == "ecapa-tdnn":
-            self.speaker_encoder = ECAPASpeakerEncoder(device=str(self.device))
-        elif self.preprocess_config.spk_encoder_type == "resemblyzer":
+        if self.preprocess_config.spk_encoder_type == "resemblyzer":
             self.speaker_encoder = ResemblyzerSpeakerEncoder(device=str(device))
         self.speaker_encoder.eval()
 

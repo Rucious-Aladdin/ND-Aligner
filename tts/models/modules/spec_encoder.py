@@ -3,7 +3,7 @@ from typing import override
 import torch
 import torch.nn as nn
 
-from tts.models.layers.film_blocks import FiLMResidualBlock
+from tts.models.modules.layers.film_blocks import FiLMResidualBlock
 
 
 class SpecEncoder(nn.Module):

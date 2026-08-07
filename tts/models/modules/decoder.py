@@ -3,8 +3,8 @@ from typing import override
 import torch
 import torch.nn as nn
 
-from ..layers.film_blocks import FiLMResidualBlock
-from ..layers.pos_encoding import PositionalEncoding1d
+from .layers.film_blocks import FiLMResidualBlock
+from .utils.pos_encoding import PositionalEncoding1d
 
 
 class Decoder(nn.Module):

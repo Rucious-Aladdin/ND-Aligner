@@ -4,7 +4,7 @@ from tts.config.preprocess.preprocess_config import PreprocessConfigs, spk_dim
 from tts.tokenizer.load_tokenizer import load_tokenizer
 
 from .data_config import (
-    FASTSPEECH2_TOKENIZER_LEXION_PATH,
+    ARPA_TOKENIZER_LEXION_PATH,
     INPUT_FEATURE_TYPE,
     N_FFT,
     N_MELS,
@@ -75,7 +75,7 @@ class SpecDecoderConfigs:
     coupling_cond_proj_dim: int = 128
     coupling_num_refine_steps: int = 6
     coupling_step_emb_dim: int = 64
-    coupling_loss_decay_factor: float = 0.5
+    coupling_loss_decay_factor: float = 1.0
     coupling_kernel_size: int = 3
     coupling_normalize_loss_weights: bool = True
 
@@ -95,7 +95,7 @@ class CRFAlignerConfigs:
     unary_scale_init: float = -2.0
 
     # conv only configs
-    conv_num_layers: int = 6
+    conv_num_layers: int = 4
     conv_num_groups: int = 8
     conv_dim_hidden: int = 64
     conv_kernel_size: list[int] = field(default_factory=lambda: [3, 3])
@@ -117,5 +117,5 @@ class NDAlignerConfigs:
     use_optional_skip_sep: bool = USE_OPTIONAL_SKIP_SEP
 
     tokenizer_type: str = TOKENIZER_TYPE
-    fastspeech2_tokenizer_lexion_path = FASTSPEECH2_TOKENIZER_LEXION_PATH
+    fastspeech2_tokenizer_lexion_path = ARPA_TOKENIZER_LEXION_PATH
     separator_token_id: int = tokenizer.seperator_id

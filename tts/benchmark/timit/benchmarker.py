@@ -13,7 +13,6 @@ import torchaudio.functional as AF
 from tqdm import tqdm
 
 from tts.models.modules.coupling_decoder import CouplingDecoder
-from tts.models.modules.hifigan_vocoder import Generator
 from tts.models.ndaligner import AlignerFeatures, NDAligner
 from tts.models.utils.input_maker import AlignerInputMaker
 from tts.models.utils.lev_words_mapper import (
@@ -23,7 +22,6 @@ from tts.models.utils.lev_words_mapper import (
 )
 
 from ..utils.entropy import compute_framewise_entropy
-from ..utils.mcd_dtw import compute_mcd_dtw
 
 
 class TIMITMetrics(NamedTuple):
@@ -33,13 +31,11 @@ class TIMITMetrics(NamedTuple):
     p_word_50ms: float  # Accuracy % within 50ms
     p_word_100ms: float  # Accuracy % within 100ms
 
-    mcd_dtw: float
     posterior_entropy: float
 
 
 class TIMITSampleResult(NamedTuple):
     boundary_errors: list[float]
-    mcd_dtw: float | None
     posterior_entropy: float | None
 
 
@@ -52,7 +48,7 @@ class TIMITBenchMarker:
       - TIMIT WRD/TXT bookkeeping
       - aligner execution
       - token-to-word mapping
-      - boundary-error, entropy, and optional MCD-DTW evaluation
+      - boundary-error, entropy
     """
 
     def __init__(
@@ -102,7 +98,6 @@ class TIMITBenchMarker:
     def __call__(
         self,
         aligner: NDAligner,
-        vocoder: Generator | None = None,
         max_test_samples: int | None = None,
         save_align_figure: bool = False,
         align_figure_dir: str | Path | None = None,
@@ -110,7 +105,6 @@ class TIMITBenchMarker:
     ) -> TIMITMetrics:
         was_aligner_training = aligner.training
         was_input_maker_training = self.input_maker.training
-        was_vocoder_training = vocoder.training if vocoder is not None else None
 
         # speaker_encoder is accepted only for backward-compatible call sites.
         # Preprocessing now uses self.input_maker.speaker_encoder internally.
@@ -121,15 +115,12 @@ class TIMITBenchMarker:
         try:
             aligner.eval()
             self.input_maker.eval()
-            if vocoder is not None:
-                vocoder.eval()
 
             triplets = (
                 self.triplets if max_test_samples is None else self.triplets[:max_test_samples]
             )
 
             all_boundary_errors: list[float] = []
-            all_mcd_dtw: list[float] = []
             all_entropy: list[float] = []
 
             for wrd_path, wav_path, txt_path in tqdm(
@@ -142,7 +133,6 @@ class TIMITBenchMarker:
                     wrd_path=wrd_path,
                     wav_path=wav_path,
                     aligner=aligner,
-                    vocoder=vocoder,
                     save_align_figure=save_align_figure,
                     align_figure_dir=align_figure_dir,
                     is_test=is_test,
@@ -151,8 +141,6 @@ class TIMITBenchMarker:
                 all_boundary_errors.extend(result.boundary_errors)
                 if result.posterior_entropy is not None:
                     all_entropy.append(result.posterior_entropy)
-                if result.mcd_dtw is not None:
-                    all_mcd_dtw.append(result.mcd_dtw)
 
             if not all_boundary_errors:
                 return TIMITMetrics(
@@ -161,7 +149,6 @@ class TIMITBenchMarker:
                     p_word_25ms=0.0,
                     p_word_50ms=0.0,
                     p_word_100ms=0.0,
-                    mcd_dtw=float("nan"),
                     posterior_entropy=float("nan"),
                 )
 
@@ -172,11 +159,6 @@ class TIMITBenchMarker:
             p_50ms = (err_tensor <= 0.050).float().mean().item() * 100.0
             p_100ms = (err_tensor <= 0.100).float().mean().item() * 100.0
 
-            mcd_dtw = (
-                torch.tensor(all_mcd_dtw, dtype=torch.float32).mean().item()
-                if all_mcd_dtw
-                else float("nan")
-            )
             posterior_entropy = (
                 torch.tensor(all_entropy, dtype=torch.float32).mean().item()
                 if all_entropy
@@ -189,7 +171,6 @@ class TIMITBenchMarker:
                 p_word_25ms=p_25ms,
                 p_word_50ms=p_50ms,
                 p_word_100ms=p_100ms,
-                mcd_dtw=mcd_dtw,
                 posterior_entropy=posterior_entropy,
             )
 
@@ -198,8 +179,6 @@ class TIMITBenchMarker:
                 aligner.train()
             if was_input_maker_training:
                 self.input_maker.train()
-            if vocoder is not None and was_vocoder_training:
-                vocoder.train()
 
     @torch.no_grad()
     def run_one(
@@ -208,7 +187,6 @@ class TIMITBenchMarker:
         wrd_path: Path | str,
         wav_path: Path | str,
         aligner: NDAligner,
-        vocoder: Generator | None = None,
         save_align_figure: bool = False,
         align_figure_dir: str | Path | None = None,
         is_test: bool = False,
@@ -302,99 +280,17 @@ class TIMITBenchMarker:
             device=batch.y.device,
         )
 
-        mcd_dtw = posterior_entropy = None
+        posterior_entropy = None
         if is_test:
             posterior_entropy = compute_framewise_entropy(
                 attn=features.soft_attn,
                 mask=spec_mask,
             ).item()
 
-            if vocoder is not None:
-                if self.ref_audio_sr != 16000:
-                    raise ValueError(
-                        "This simplified TIMIT path assumes ref_audio_sr == 16000 "
-                        + f"for MCD-DTW, got {self.ref_audio_sr}."
-                    )
-
-                mcd_dtw = self._compute_reconstruction_mcd_dtw(
-                    aligner=aligner,
-                    vocoder=vocoder,
-                    features=features,
-                    spec_mask=spec_mask,
-                    ref_wav_tensor=batch.wav_16k,
-                    cond=cond,
-                    device=str(batch.y.device),
-                )
-
         return TIMITSampleResult(
             boundary_errors=boundary_errors,
-            mcd_dtw=mcd_dtw,
             posterior_entropy=posterior_entropy,
         )
-
-    @torch.no_grad()
-    def _compute_reconstruction_mcd_dtw(
-        self,
-        aligner: NDAligner,
-        vocoder: Generator,
-        features: AlignerFeatures,
-        spec_mask: torch.Tensor,
-        ref_wav_tensor: torch.Tensor,
-        cond: torch.Tensor,
-        device: str,
-    ) -> float:
-        def normalize_wav_shape(wav: torch.Tensor) -> torch.Tensor:
-            if wav.dim() == 3:
-                if wav.size(1) == 1:
-                    wav = wav.squeeze(1)
-                elif wav.size(2) == 1:
-                    wav = wav.squeeze(2)
-                else:
-                    raise ValueError(f"Expected mono vocoder output, got {tuple(wav.shape)}.")
-            if wav.dim() != 2:
-                raise ValueError(f"wav must have shape (B, T), got {tuple(wav.shape)}.")
-            return wav
-
-        assert aligner.spec_decoder is not None
-
-        vocoder = vocoder.to(device)
-        vocoder.eval()
-
-        decoder_input = torch.bmm(
-            features.soft_attn,
-            features.h_text.transpose(1, 2),
-        )  # (B, T_mel, C_text)
-
-        recon_mel_bt = aligner.reconstruct(
-            aligned_h=decoder_input,
-            cond=cond,
-            spec_mask=spec_mask,
-        )
-
-        hyp_wav = vocoder(recon_mel_bt.transpose(1, 2).contiguous())
-
-        hyp_wav = normalize_wav_shape(hyp_wav)
-
-        # HiFi-GAN vocoder is assumed to output 22050 Hz.
-        hyp_wav = AF.resample(
-            waveform=hyp_wav,
-            orig_freq=22050,
-            new_freq=self.ref_audio_sr,
-        )
-
-        ref_wav = normalize_wav_shape(ref_wav_tensor)
-        ref_mask = torch.ones_like(ref_wav, dtype=ref_wav.dtype, device=ref_wav.device)
-        hyp_mask = torch.ones_like(hyp_wav, dtype=hyp_wav.dtype, device=hyp_wav.device)
-
-        score = compute_mcd_dtw(
-            ref_wavs=ref_wav,
-            ref_wav_mask=ref_mask,
-            hyp_wavs=hyp_wav,
-            hyp_wav_mask=hyp_mask,
-            sampling_rate=16000,
-            exclude_c0=True,
-        )
-        return score.mean().item()
 
     def _get_eval_instance(
         self,
@@ -817,7 +713,6 @@ class TIMITAnalysisRow:
     p_100ms: float
 
     posterior_entropy: float | None
-    mcd_dtw: float | None
 
 
 class TIMITErrorAnalyzer(TIMITBenchMarker):
@@ -873,11 +768,9 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
     def analyze(
         self,
         aligner: NDAligner,
-        vocoder: Generator | None = None,
         max_test_samples: int | None = None,
         top_k_alignments: int = 30,
         compute_entropy: bool = True,
-        compute_mcd_dtw: bool = False,
     ) -> list[TIMITAnalysisRow]:
         """
         Run sample-level error analysis.
@@ -886,8 +779,6 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
             aligner:
                 Trained ND-Aligner.
 
-            vocoder:
-                Required only when compute_mcd_dtw=True.
 
             max_test_samples:
                 Optional limit on the number of TIMIT samples.
@@ -899,19 +790,12 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
             compute_entropy:
                 Compute posterior entropy. This requires soft alignment.
 
-            compute_mcd_dtw:
-                Compute reconstruction MCD-DTW. This is relatively expensive
-                and requires vocoder.
-
         Returns:
             Rows sorted by descending sample-level mean WBE.
         """
-        if compute_mcd_dtw and vocoder is None:
-            raise ValueError("compute_mcd_dtw=True requires a vocoder.")
 
         was_aligner_training = aligner.training
         was_input_maker_training = self.input_maker.training
-        was_vocoder_training = vocoder.training if vocoder is not None else None
 
         device = next(aligner.parameters()).device
         self.input_maker.to(device=device)
@@ -925,11 +809,7 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
             aligner.eval()
             self.input_maker.eval()
 
-            if vocoder is not None:
-                vocoder.eval()
-
-            run_test_metrics = compute_entropy or compute_mcd_dtw
-            analysis_vocoder = vocoder if compute_mcd_dtw else None
+            run_test_metrics = compute_entropy
 
             for wrd_path, wav_path, txt_path in tqdm(
                 triplets,
@@ -941,7 +821,6 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
                     wrd_path=wrd_path,
                     wav_path=wav_path,
                     aligner=aligner,
-                    vocoder=analysis_vocoder,
                     save_align_figure=False,
                     align_figure_dir=None,
                     is_test=run_test_metrics,
@@ -984,7 +863,6 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
                     p_50ms=((error_tensor <= 50.0).float().mean().item() * 100.0),
                     p_100ms=((error_tensor <= 100.0).float().mean().item() * 100.0),
                     posterior_entropy=result.posterior_entropy,
-                    mcd_dtw=result.mcd_dtw,
                 )
                 rows.append(row)
 
@@ -1018,9 +896,6 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
 
             if was_input_maker_training:
                 self.input_maker.train()
-
-            if vocoder is not None and was_vocoder_training:
-                vocoder.train()
 
     def _make_sample_id(self, wav_path: Path) -> str:
         try:
@@ -1310,7 +1185,6 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
                 wrd_path=Path(row.wrd_path),
                 wav_path=Path(row.wav_path),
                 aligner=aligner,
-                vocoder=None,
                 save_align_figure=True,
                 align_figure_dir=rank_dir,
                 is_test=compute_soft_path,

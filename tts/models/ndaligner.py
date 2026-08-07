@@ -9,11 +9,10 @@ import torch.nn.functional as F
 from tts.models.modules.coupling_decoder import CouplingDecoder, CouplingDecoderOutput
 from tts.models.modules.crf_aligner import LinearCRFAligner
 from tts.models.modules.decoder import Decoder
-from tts.models.modules.hifigan_vocoder import Generator
 from tts.models.modules.spec_encoder import SpecEncoder
 from tts.models.modules.text_encoder import TextEncoder
+from tts.models.modules.utils.sequence_mask import sequence_mask
 from tts.models.utils.input_maker import AlignerInputMaker
-from tts.models.utils.sequence_mask import sequence_mask
 
 from ..config.ndaligner.model_config import NDAlignerConfigs
 from ..config.ndaligner.training_module_config import NDAlignerTrainingModuleConfigs
@@ -61,9 +60,8 @@ def init_nd_aligner(
         ).to(device)
 
     # for inference
-
-    if load_input_maker:
-        input_maker = AlignerInputMaker(
+    input_maker = (
+        AlignerInputMaker(
             audio_config=config.audio,
             preprocess_config=config.preprocess,
             tokenizer_type=config.tokenizer_type,
@@ -72,10 +70,11 @@ def init_nd_aligner(
             trim_nonspeech_region=False,
             device=device,
         )
-    else:
-        input_maker = None
+        if load_input_maker
+        else None
+    )
 
-    model = NDAligner(
+    return NDAligner(
         text_encoder=text_encoder,
         spec_encoder=spec_encoder,
         crf_aligner=aligner,
@@ -87,12 +86,9 @@ def init_nd_aligner(
         separator_token_id=config.separator_token_id,
     )
 
-    return model
-
 
 def init_nd_aligner_training_module(
     config: NDAlignerTrainingModuleConfigs | None = None,
-    load_vocoder: bool = False,
     load_input_maker: bool = True,
     device: str = "cpu",
 ):
@@ -105,17 +101,7 @@ def init_nd_aligner_training_module(
         device=device,
     )
 
-    vocoder = None
-    if load_vocoder:
-        vocoder = Generator.from_config_path(
-            config_path=config.vocoder.config_path,
-            ckpt_path=config.vocoder.ckpt_path,
-        ).to(device)
-
-    return NDAlignerTrainingModule(
-        nd_aligner=nd_aligner,
-        vocoder=vocoder,
-    )
+    return NDAlignerTrainingModule(nd_aligner=nd_aligner)
 
 
 class AlignerForward(NamedTuple):
@@ -151,7 +137,6 @@ class AlignerForward(NamedTuple):
     crf_loss: torch.Tensor
     diag_loss: torch.Tensor
     recon_loss: torch.Tensor
-    viterbi_kl_loss: torch.Tensor
 
     # Optional
     coupling_dec_out: CouplingDecoderOutput | None
@@ -317,39 +302,6 @@ def compute_beta_binomial_loss(
     return loss_per_frame.sum() / denom
 
 
-def compute_viterbi_kl_loss(
-    log_gamma: torch.Tensor,
-    viterbi_attn: torch.Tensor,
-    spec_mask: torch.Tensor,
-) -> torch.Tensor:
-    """
-    Computes the negative log-likelihood (NLL) of the optimal Viterbi path.
-    This effectively acts as a KL divergence loss between the hard Viterbi
-    distribution (from MAS) and the aligner's likelihood distribution.
-
-    Args:
-        log_gamma (torch.Tensor): Log-likelihood matrix of shape (B, T_mel, T_text).
-            Typically computed as log-probabilities of mel frames given text features.
-        viterbi_attn (torch.Tensor): Binary hard alignment path of shape (B, T_mel, T_text)
-            obtained from `find_maximum_path`.
-        spec_mask (torch.Tensor): Binary mask for spectrogram sequences of shape (B, T_mel).
-            1.0 for valid frames, 0.0 for padding.
-
-    Returns:
-        torch.Tensor: Scalar tensor representing the averaged NLL loss.
-            The loss is normalized by the total number of valid frames in the batch.
-    """
-    viterbi_log_probs = (viterbi_attn * log_gamma).sum(dim=-1)
-    kl_per_frame = -viterbi_log_probs
-    masked_kl = kl_per_frame * spec_mask
-    total_kl = masked_kl.sum()
-    total_frames = spec_mask.sum() + 1e-8
-
-    loss = total_kl / total_frames
-
-    return loss
-
-
 class NDAligner(BaseModel):
     def __init__(
         self,
@@ -396,7 +348,7 @@ class NDAligner(BaseModel):
         cond: torch.Tensor,
         y_recon: torch.Tensor | None = None,  # reconstruction target: mel, (B, n_mels, T)
         y_recon_lengths: torch.Tensor | None = None,
-        compute_viterbi_loss: bool = False,
+        compute_hard_path: bool = False,
         compute_diagonal_loss: bool = False,
     ) -> AlignerForward:
         assert self.spec_decoder is not None
@@ -428,7 +380,7 @@ class NDAligner(BaseModel):
             y_lengths=y_lengths,
             cond=cond,
             compute_soft_path=True,
-            compute_hard_path=compute_viterbi_loss,
+            compute_hard_path=compute_hard_path,
         )
 
         aligned_h = torch.bmm(
@@ -494,17 +446,6 @@ class NDAligner(BaseModel):
                 omega=1.0,
             )
 
-        viterbi_kl_loss = torch.zeros((), device=x.device)
-
-        if compute_viterbi_loss and out.hard_attn is not None:
-            spec_mask_2d = spec_mask.squeeze(1) if spec_mask.dim() == 3 else spec_mask
-
-            viterbi_kl_loss = compute_viterbi_kl_loss(
-                log_gamma=out.log_gamma,
-                viterbi_attn=out.hard_attn,
-                spec_mask=spec_mask_2d,
-            )
-
         return AlignerForward(
             soft_dur=out.soft_dur,
             soft_attn=out.soft_attn,
@@ -526,7 +467,6 @@ class NDAligner(BaseModel):
             recon_loss=recon_loss,
             crf_loss=crf_loss,
             diag_loss=diag_loss,
-            viterbi_kl_loss=viterbi_kl_loss,
             coupling_dec_out=coupling_dec_out,
         )
 
@@ -1149,7 +1089,6 @@ class NDAlignerLossWeights(NamedTuple):
     crf_loss_weight: float
     diag_loss_weight: float = 0.0
     recon_loss_weight: float = 0.0
-    viterbi_kl_loss_weight: float = 0.0
 
 
 class NDAlignerTrainingModule(BaseModel):
@@ -1158,8 +1097,6 @@ class NDAlignerTrainingModule(BaseModel):
 
     This module delegates alignment computation to the inner NDAligner and adds:
         - weighted loss aggregation from AlignerForwardOutput
-        - optional vocoder-based mel-to-waveform conversion
-        - optional speaker-embedding extraction
 
     The wrapped NDAligner remains responsible for monotonic CRF alignment,
     posterior computation, Viterbi decoding, and auxiliary loss terms.
@@ -1168,14 +1105,10 @@ class NDAlignerTrainingModule(BaseModel):
     def __init__(
         self,
         nd_aligner: NDAligner,
-        vocoder: Generator | None = None,
     ):
         super().__init__()
 
         self.nd_aligner = nd_aligner
-
-        # External Modules
-        self.vocoder = vocoder
 
     @override
     def forward(
@@ -1188,7 +1121,7 @@ class NDAlignerTrainingModule(BaseModel):
         loss_weights: NDAlignerLossWeights,
         y_recon: torch.Tensor | None = None,  # mel reconstruction target
         y_recon_lengths: torch.Tensor | None = None,
-        compute_viterbi_loss: bool = False,
+        compute_hard_path: bool = False,
         compute_diagonal_loss: bool = False,
     ) -> NDAlignerTrainingModuleForward:
         out = cast(
@@ -1201,8 +1134,8 @@ class NDAlignerTrainingModule(BaseModel):
                 cond=cond,
                 y_recon=y_recon,
                 y_recon_lengths=y_recon_lengths,
+                compute_hard_path=compute_hard_path,
                 compute_diagonal_loss=compute_diagonal_loss,
-                compute_viterbi_loss=compute_viterbi_loss,
             ),
         )
 
@@ -1218,15 +1151,3 @@ class NDAlignerTrainingModule(BaseModel):
             aligner_output=out,
             loss=total_loss,
         )
-
-    @torch.no_grad()
-    def mel2wav(self, x: torch.Tensor) -> torch.Tensor:
-        assert self.vocoder is not None, "Vocoder is not initialized."
-
-        if x.shape[1] != self.vocoder.h.num_mels:
-            x = x.transpose(1, 2)
-
-        with torch.no_grad():
-            wav = self.vocoder(x)
-
-        return wav

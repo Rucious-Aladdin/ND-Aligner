@@ -26,7 +26,7 @@ from tts.train.utils.anneal import get_linear_anneal_weight
 from tts.train.utils.checkpoint_manager import CheckpointManager
 from tts.utils.set_seed import set_seed
 
-from .base_trainer import BaseTrainer
+from .utils.base_trainer import BaseTrainer
 
 
 class TimitCheckpointMetric(NamedTuple):
@@ -91,7 +91,6 @@ class NDAlignerTrainer(
         print("🏗️ Initializing model...")
         model = init_nd_aligner_training_module(
             config=self.model_config,
-            load_vocoder=self.data_config.extra_exp.train_time_eval_logging,
             device=str(self.device),
         )
         model.print_parameter_summary()
@@ -205,13 +204,6 @@ class NDAlignerTrainer(
                 cfg.recon_init_weight,
                 cfg.recon_final_weight,
             ),
-            viterbi_kl_loss_weight=get_linear_anneal_weight(
-                step,
-                cfg.viterbi_kl_start_step,
-                cfg.viterbi_kl_end_step,
-                cfg.viterbi_kl_init_weight,
-                cfg.viterbi_kl_final_weight,
-            ),
         )
 
     def _build_loss_values(self, out: AlignerForward) -> LossValues:
@@ -219,7 +211,6 @@ class NDAlignerTrainer(
             recon=out.recon_loss.item(),
             crf=out.crf_loss.item(),
             diag=out.diag_loss.item(),
-            viterbi_kl=out.viterbi_kl_loss.item(),
         )
 
     @override
@@ -240,7 +231,6 @@ class NDAlignerTrainer(
 
         loss_weights = self._get_loss_weights(step)
 
-        compute_viterbi_loss = loss_weights.viterbi_kl_loss_weight > 0.0
         compute_diagonal_loss = loss_weights.diag_loss_weight > 0.0
 
         forward_out = cast(
@@ -254,7 +244,6 @@ class NDAlignerTrainer(
                 loss_weights=loss_weights,
                 y_recon=y_recon,
                 y_recon_lengths=y_recon_lengths,
-                compute_viterbi_loss=compute_viterbi_loss,
                 compute_diagonal_loss=compute_diagonal_loss,
             ),
         )
@@ -381,7 +370,7 @@ class NDAlignerTrainer(
                 loss_weights=loss_weights,
                 y_recon=y_recon,
                 y_recon_lengths=y_recon_len,
-                compute_viterbi_loss=True,
+                compute_hard_path=True,
                 compute_diagonal_loss=compute_diagonal_loss,
             ),
         )
@@ -581,93 +570,6 @@ class NDAlignerTrainer(
             step,
         )
 
-        # ------------------------------------------------------------------
-        # Audio logging
-        # ------------------------------------------------------------------
-        if self.model.vocoder is not None:
-            import math
-
-            import torch.nn.functional as F
-
-            from tts.models.modules.hifigan_vocoder import HIFIGAN_HOP_LENGTH
-
-            hop_length = int(self.data_config.audio.hop_length)
-
-            if torch.is_tensor(recon_len):
-                recon_len_int = int(recon_len.item())
-            else:
-                recon_len_int = int(recon_len)
-
-            # Original target audio length under the dataset mel hop.
-            audio_len = recon_len_int * hop_length
-
-            script = batch.scripts[0]
-
-            recon_spec_gt = batch.recon_spec[:1]
-            recon_spec_hat = out.recon[:1]
-
-            num_mels = int(self.model.vocoder.h.num_mels)
-
-            # Convert both specs to vocoder format: (B, n_mels, T)
-            if recon_spec_gt.shape[1] != num_mels:
-                recon_spec_gt = recon_spec_gt.transpose(1, 2)
-
-            if recon_spec_hat.shape[1] != num_mels:
-                recon_spec_hat = recon_spec_hat.transpose(1, 2)
-
-            # Crop to the valid reconstruction length before interpolation.
-            # This avoids interpolating padded mel frames.
-            recon_spec_gt = recon_spec_gt[..., :recon_len_int]
-            recon_spec_hat = recon_spec_hat[..., :recon_len_int]
-
-            if hop_length != HIFIGAN_HOP_LENGTH:
-                # Number of mel frames required by the HiFi-GAN vocoder so that
-                # vocoder_len * HIFIGAN_HOP_LENGTH covers the original audio length.
-                vocoder_len = max(
-                    1,
-                    math.ceil(audio_len / HIFIGAN_HOP_LENGTH),
-                )
-
-                recon_spec_gt = F.interpolate(
-                    recon_spec_gt,
-                    size=vocoder_len,
-                    mode="linear",
-                    align_corners=False,
-                )
-
-                recon_spec_hat = F.interpolate(
-                    recon_spec_hat,
-                    size=vocoder_len,
-                    mode="linear",
-                    align_corners=False,
-                )
-
-            wav_gt = self.model.mel2wav(recon_spec_gt)
-            wav_hat = self.model.mel2wav(recon_spec_hat)
-
-            # Safety clamp in case the vocoder output is slightly shorter than expected.
-            audio_len = min(
-                audio_len,
-                wav_gt.shape[-1],
-                wav_hat.shape[-1],
-            )
-
-            self.logger.log_audio(
-                f"{prefix}/GT_Audio",
-                wav_gt[0, :, :audio_len],
-                step,
-                self.data_config.audio.sr,
-            )
-
-            self.logger.log_audio(
-                f"{prefix}/Predicted_Audio",
-                wav_hat[0, :, :audio_len],
-                step,
-                self.data_config.audio.sr,
-            )
-
-            self.logger.log_text(f"{prefix}/Script", script, step)
-
     @override
     def on_training_end(self, epoch: int, step: int):
         if self.train_time_eval_logger is not None:
@@ -705,7 +607,6 @@ class NDAlignerTrainer(
             f"recon={losses.recon:.4f} | "
             + f"crf={losses.crf:.4f} | "
             + f"diag={losses.diag:.4f} | "
-            + f"viterbi_kl={losses.viterbi_kl:.4f} | "
         )
 
     @staticmethod
@@ -801,7 +702,6 @@ class NDAlignerTrainer(
         was_training = self.model.training
 
         self.model.eval()
-        assert self.model.vocoder is not None
         assert self.model.nd_aligner.input_maker is not None
 
         if (
@@ -814,7 +714,6 @@ class NDAlignerTrainer(
             epoch=epoch,
             step=step,
             aligner=self.model.nd_aligner,
-            vocoder=self.model.vocoder,
             is_test=is_test,
         )
 
@@ -827,7 +726,6 @@ class NDAlignerTrainer(
             + f"P25={row['p_word_25ms']:.2f} | "
             + f"P50={row['p_word_50ms']:.2f} | "
             + f"P100={row['p_word_100ms']:.2f} | "
-            + f"MCD={row['mcd_dtw']:.4f} | "
             + f"Entropy={row['posterior_entropy']:.4f}"
         )
 
@@ -841,7 +739,6 @@ class NDAlignerTrainer(
                     "P_Word_25ms": row["p_word_25ms"],
                     "P_Word_50ms": row["p_word_50ms"],
                     "P_Word_100ms": row["p_word_100ms"],
-                    "MCD_DTW": row["mcd_dtw"],
                     "Posterior_Entropy": row["posterior_entropy"],
                 },
                 step,

@@ -8,7 +8,7 @@ import torch
 from tqdm import tqdm
 
 from tts.config.utils.io import load_config
-from tts.models.modules.spk_encoder import ECAPASpeakerEncoder, ResemblyzerSpeakerEncoder
+from tts.models.modules.spk_encoder import ResemblyzerSpeakerEncoder
 
 from ..config.preprocess.preprocess_config import PreprocessConfigs
 
@@ -32,9 +32,7 @@ def main(args: Any):
     print(f">>> Initializing SpeakerEncoder ({spk_encoder_type.upper()})...")
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
-    if spk_encoder_type == "ecapa-tdnn":
-        speaker_encoder = ECAPASpeakerEncoder(device=device)
-    elif spk_encoder_type == "resemblyzer":
+    if spk_encoder_type == "resemblyzer":
         speaker_encoder = ResemblyzerSpeakerEncoder(device=device)
     else:
         raise RuntimeError(f"Invalid Speaker Encoder Type for {spk_encoder_type}")

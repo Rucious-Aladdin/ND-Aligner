@@ -9,11 +9,10 @@ import numpy as np
 import torch
 from g2p_en import G2p
 
-from tts.baseline.FastSpeech2.text import sequence_to_text, text_to_sequence
-from tts.baseline.FastSpeech2.text.cleaners import english_cleaners
-from tts.baseline.FastSpeech2.text.symbols import symbols
-
 from .base_tokenizer import BaseTokenizer, TokenIdInput
+from .fastspeech2_text import sequence_to_text, text_to_sequence
+from .fastspeech2_text.cleaners import english_cleaners
+from .fastspeech2_text.symbols import symbols
 
 # nltk.download("averaged_perceptron_tagger_eng")
 
@@ -407,14 +406,16 @@ class ARPATokenizer(BaseTokenizer):
 
 
 if __name__ == "__main__":
-    tokenizer = ARPATokenizer()
+    tokenizer = ARPATokenizer(
+        lexicon_path="/home/blue2959/monotonic_tts/tts/baseline/FastSpeech2/lexicon/vctk-lexicon.txt"
+    )
 
     texts = [
         "Please call Stella.",
         "Hello world.",
         "This is a tokenizer test.",
         "I have two apples.",
-        "FastSpeech two uses ARPAbet phones.",
+        "Fast Speech two uses ARPAbet phones.",
     ]
 
     for idx, text in enumerate(texts):

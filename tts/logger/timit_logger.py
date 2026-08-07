@@ -5,8 +5,6 @@ from pathlib import Path
 from typing import TypedDict
 
 from tts.benchmark.timit.benchmarker import TIMITBenchMarker
-from tts.models.modules.hifigan_vocoder import Generator
-from tts.models.modules.spk_encoder import ECAPASpeakerEncoder
 from tts.models.ndaligner import NDAligner
 
 
@@ -27,7 +25,6 @@ class EvalCSVRowInstance(TypedDict):
     p_word_100ms: float
 
     # Additional aggregate metrics
-    mcd_dtw: float
     posterior_entropy: float
 
 
@@ -65,12 +62,10 @@ class NDAlignerTimitLogger:
         epoch: int,
         step: int,
         aligner: NDAligner,
-        vocoder: Generator | None = None,
         is_test: bool = False,
     ) -> EvalCSVRowInstance:
         metrics = self.timit_benchmarker.__call__(
             aligner=aligner,
-            vocoder=vocoder,
             max_test_samples=self.max_test_samples,
             save_align_figure=self.save_align_figure,
             align_figure_dir=self.align_figure_dir,
@@ -87,7 +82,6 @@ class NDAlignerTimitLogger:
             "p_word_25ms": float(metrics.p_word_25ms),
             "p_word_50ms": float(metrics.p_word_50ms),
             "p_word_100ms": float(metrics.p_word_100ms),
-            "mcd_dtw": float(metrics.mcd_dtw),
             "posterior_entropy": float(metrics.posterior_entropy),
         }
 

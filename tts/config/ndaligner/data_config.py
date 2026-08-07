@@ -6,19 +6,46 @@ from dataclasses import dataclass, field
 
 from ..preprocess.preprocess_config import SPK_ENCODER_TYPE, PreprocessConfigs
 
-SAMPLE_RATE = 22050
 INPUT_FEATURE_TYPE = "mel"
 # INPUT_FEATURE_TYPE: str = "linspec"
 
 DATA_PARENT_DIR = "/shared/data_zfs/blue2959"
 TOKENIZER_TYPE: str = "espeak"  # "arpa"
-FASTSPEECH2_TOKENIZER_LEXION_PATH = "./tts/baseline/FastSpeech2/lexicon/vctk-lexicon.txt"
+ARPA_TOKENIZER_LEXION_PATH = "./tts/baseline/FastSpeech2/lexicon/vctk-lexicon.txt"
 
 N_MELS = 80
-HOP_LENGTH = 256
 N_FFT = 1024
 
-DATASETS = ["vctk"]
+# ==================================
+
+SAMPLE_RATE = 16000
+
+# hop = 10ms / win = 25ms
+WIN_LENGTH = 400
+HOP_LENGTH = 160
+
+# # hop = 5ms / win = 25ms
+# WIN_LENGTH = 400
+# HOP_LENGTH = 80
+
+# ==================================
+
+# # SAMPLE_RATE=22050
+
+# # hop = 11.67ms / win = 46.8ms
+# WIN_LENGTH = 1024
+# HOP_LENGTH = 256
+
+# # hop = 11.67ms / win = 23.4ms
+# WIN_LENGTH = 1024
+# HOP_LENGTH = 256
+
+# ==================================
+
+
+DATASETS = ["vctk", "libritts"]
+# DATASETS = ["vctk"]
+
 SEED = 42
 
 
@@ -26,7 +53,7 @@ def cache_dir_name() -> str:
     dataset_tag = "+".join(DATASETS)
 
     if INPUT_FEATURE_TYPE == "mel":
-        feature_tag = f"mel{N_MELS}_hop{HOP_LENGTH}"
+        feature_tag = f"mel{N_MELS}_sr{SAMPLE_RATE}_hop{HOP_LENGTH}_win{WIN_LENGTH}"
     elif INPUT_FEATURE_TYPE == "linspec":
         n_freq = N_FFT // 2 + 1
         feature_tag = f"linspec{n_freq}"
@@ -40,6 +67,15 @@ def cache_dir_name() -> str:
     )
 
 
+def dataset_postfix(x) -> str:
+    if SAMPLE_RATE == 16_000:
+        return f"{x}-16k"
+    elif SAMPLE_RATE == 22_050:
+        return x
+    else:
+        raise ValueError()
+
+
 @dataclass(frozen=True)
 class AudioConfigs:
     sr: int = SAMPLE_RATE
@@ -48,7 +84,7 @@ class AudioConfigs:
     # >> mel-spectrogram configs
     n_fft: int = N_FFT
     hop_length: int = HOP_LENGTH
-    win_length: int = 1024
+    win_length: int = WIN_LENGTH
     n_mels: int = N_MELS
     f_min: float = 0.0
     f_max: float = 8000.0
@@ -61,16 +97,32 @@ class DatasetConfigs:
     dataset_list: list[str] = field(default_factory=lambda: list(DATASETS))
 
     # Root directories for each dataset type (preprocessed)
-    ljspeech_root: str = os.path.join(DATA_PARENT_DIR, "LJSpeech-1.1-preprocessed")
+
+    # LJ-Speech
+    ljspeech_root: str = os.path.join(
+        DATA_PARENT_DIR,
+        dataset_postfix(
+            "LJSpeech-1.1-preprocessed",
+        ),
+    )
     ljspeech_num_test_samples: int = 30
 
-    vctk_root: str = os.path.join(DATA_PARENT_DIR, "VCTK-preprocessed-trimmed")
-    vctk_test_speakers: list[str] = field(
-        # default_factory=lambda: ["p225", "p226", "p227", "p228", "p229", "p232"],
-        default_factory=lambda: [],
+    # VCTK
+    vctk_root: str = os.path.join(
+        DATA_PARENT_DIR,
+        dataset_postfix(
+            "VCTK-preprocessed-trimmed",
+        ),
     )
+    vctk_test_speakers: list[str] = field(default_factory=lambda: [])
 
-    libritts_root: str = os.path.join(DATA_PARENT_DIR, "LibriTTS-preprocessed-trimmed")
+    # LibriTTS
+    libritts_root: str = os.path.join(
+        DATA_PARENT_DIR,
+        dataset_postfix(
+            "LibriTTS-preprocessed-trimmed",
+        ),
+    )
     libritts_subsets: list[str] = field(
         default_factory=lambda: ["train-clean-100", "train-clean-360"]
     )  # train-clean-360
@@ -87,17 +139,17 @@ class DatasetConfigs:
     max_duration_sec: float = 15.0
 
     tokenizer_type: str = TOKENIZER_TYPE
-    fastspeech2_lexicon_path: str = FASTSPEECH2_TOKENIZER_LEXION_PATH
+    fastspeech2_lexicon_path: str = ARPA_TOKENIZER_LEXION_PATH
 
 
 @dataclass(frozen=True)
 class ExperimentConfigs:
     train_time_eval_logging: bool = True
-    train_time_eval_per_step: int = 500
+    train_time_eval_per_step: int = 1000
 
-    base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments"
-    exp_name: str = "cuda_forward_backward_test"
-    exp_variant: str = "cuda_test"
+    base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.0/main"
+    exp_name: str = "vctk+libritts+full+sr16k+hop10ms+win25ms"
+    exp_variant: str = "vctk+libritts+full+sr16k+hop10ms+win25ms"
 
     timit_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TRAIN"
     timit_test_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TEST"
@@ -109,7 +161,7 @@ class ExperimentConfigs:
 class TrainConfigs:
     # --- Logging & Checkpointing ---
     log_dir: str = "./runs"
-    run_name: str = "nd_aligner_cuda_forward_backward_test"
+    run_name: str = "nd_aligner_main_vctk+libritts+full+sr16k+hop10ms+win25ms"
 
     continue_path: str = ""
     continue_dir: str = ""
@@ -128,7 +180,7 @@ class TrainConfigs:
     save_interval: int = 2500
 
     # --- Training Loop Limits ---
-    max_epochs: int = 20
+    max_epochs: int = 500
     max_steps: int = 300000  # deprecated
 
     # --- Hardware & Dataloader ---
@@ -145,7 +197,7 @@ class TrainConfigs:
     lr_decay_rate: float = 1.0
     betas: list[float] = field(default_factory=lambda: [0.8, 0.99])
     eps: float = 1e-9
-    weight_decay: float = 1e-1
+    weight_decay: float = 1e-2
     grad_clip_thresh: float = 2.0
 
     # --- Experiment Tracking ---
@@ -176,12 +228,6 @@ class LossConfigs:
     diag_final_weight: float = 0.0
     diag_start_step: int = 0
     diag_end_step: int = 30000
-
-    # Alignment Viterbi KL Loss Scheduling
-    viterbi_kl_init_weight: float = 0.0
-    viterbi_kl_final_weight: float = 0.0
-    viterbi_kl_start_step: int = 50000
-    viterbi_kl_end_step: int = 100000
 
 
 @dataclass(frozen=True)

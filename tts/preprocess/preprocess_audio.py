@@ -124,8 +124,8 @@ def main():
         "-j",
         "--num_workers",
         type=int,
-        default=8,
-        help="Number of parallel preprocessing workers. Default: 8.",
+        default=16,
+        help="Number of parallel preprocessing workers. Default: 16.",
     )
     args = parser.parse_args()
 

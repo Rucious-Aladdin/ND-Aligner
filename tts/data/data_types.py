@@ -7,7 +7,6 @@ class LossValues(NamedTuple):
     recon: float
     crf: float
     diag: float
-    viterbi_kl: float
 
 
 class TrainItem(NamedTuple):
