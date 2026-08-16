@@ -6,13 +6,11 @@ import math
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import NamedTuple
+from typing import NamedTuple, override
 
 import torch
-import torchaudio.functional as AF
 from tqdm import tqdm
 
-from tts.models.modules.coupling_decoder import CouplingDecoder
 from tts.models.ndaligner import AlignerFeatures, NDAligner
 from tts.models.utils.input_maker import AlignerInputMaker
 from tts.models.utils.lev_words_mapper import (
@@ -37,6 +35,12 @@ class TIMITMetrics(NamedTuple):
 class TIMITSampleResult(NamedTuple):
     boundary_errors: list[float]
     posterior_entropy: float | None
+
+
+class PhonemeBoundaryError(NamedTuple):
+    phoneme: str
+    boundary_type: str  # "start" or "end"
+    error_sec: float
 
 
 class TIMITBenchMarker:
@@ -269,6 +273,7 @@ class TIMITBenchMarker:
         boundary_errors = self._get_eval_instance(
             wrd_segments=wrd_segments,
             matched_words=matched,
+            hyp_symbols=hyp_symbols,
             hard_dur=hard_dur,
             wav_16k_start_offset=wav_16k_start_offset,
         )
@@ -296,9 +301,33 @@ class TIMITBenchMarker:
         self,
         wrd_segments: list[WordSegment],
         matched_words: MatchedWords,
+        hyp_symbols: list[str],
         hard_dur: list[int],
         wav_16k_start_offset: int,
     ) -> list[float]:
+        records = self._get_phoneme_boundary_errors(
+            wrd_segments=wrd_segments,
+            matched_words=matched_words,
+            hyp_symbols=hyp_symbols,
+            hard_dur=hard_dur,
+            wav_16k_start_offset=wav_16k_start_offset,
+        )
+        return [record.error_sec for record in records]
+
+    def _get_phoneme_boundary_errors(
+        self,
+        wrd_segments: list[WordSegment],
+        matched_words: MatchedWords,
+        hyp_symbols: list[str],
+        hard_dur: list[int],
+        wav_16k_start_offset: int,
+    ) -> list[PhonemeBoundaryError]:
+        """Return word-boundary errors assigned to boundary phonemes.
+
+        For every matched word span, the word start error is assigned to the
+        first hypothesized token in the span and the word end error is assigned
+        to the last hypothesized token in the span.
+        """
         sec_per_frame = self.hyp_hop_length / self.hyp_audio_sr
 
         # wav_16k offset은 항상 16-kHz sample 좌표이다.
@@ -316,13 +345,35 @@ class TIMITBenchMarker:
             token_starts.append(start_sec)
             token_ends.append(end_sec)
 
-        errors: list[float] = []
+        records: list[PhonemeBoundaryError] = []
 
         for ref_slice, hyp_slice in zip(
             matched_words.ref_matched_indices,
             matched_words.hyp_matched_indices,
             strict=True,
         ):
+            if (
+                ref_slice.start is None
+                or ref_slice.stop is None
+                or hyp_slice.start is None
+                or hyp_slice.stop is None
+            ):
+                continue
+
+            if ref_slice.stop <= ref_slice.start or hyp_slice.stop <= hyp_slice.start:
+                continue
+
+            start_token_idx = hyp_slice.start
+            end_token_idx = hyp_slice.stop - 1
+
+            if not (
+                0 <= start_token_idx < len(hyp_symbols)
+                and 0 <= end_token_idx < len(hyp_symbols)
+                and start_token_idx < len(token_starts)
+                and end_token_idx < len(token_ends)
+            ):
+                continue
+
             gt_start = (
                 wrd_segments[ref_slice.start].start_sample / self.ref_audio_sr - start_offset_sec
             )
@@ -330,13 +381,25 @@ class TIMITBenchMarker:
                 wrd_segments[ref_slice.stop - 1].end_sample / self.ref_audio_sr - start_offset_sec
             )
 
-            pred_start = token_starts[hyp_slice.start]
-            pred_end = token_ends[hyp_slice.stop - 1]
+            pred_start = token_starts[start_token_idx]
+            pred_end = token_ends[end_token_idx]
 
-            errors.append(abs(pred_start - gt_start))
-            errors.append(abs(pred_end - gt_end))
+            records.append(
+                PhonemeBoundaryError(
+                    phoneme=hyp_symbols[start_token_idx],
+                    boundary_type="start",
+                    error_sec=abs(pred_start - gt_start),
+                )
+            )
+            records.append(
+                PhonemeBoundaryError(
+                    phoneme=hyp_symbols[end_token_idx],
+                    boundary_type="end",
+                    error_sec=abs(pred_end - gt_end),
+                )
+            )
 
-        return errors
+        return records
 
     @staticmethod
     def _read_wrd(wrd_path: Path) -> list[WordSegment]:
@@ -729,6 +792,9 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
                 sample_wbe_ecdf.png
                 worst_samples.png
                 wbe_vs_entropy.png
+                phoneme_start_boundary_error.png
+                phoneme_end_boundary_error.png
+                phoneme_boundary_error_combined.png
             alignments/
                 <worst-sample alignment figures>
     """
@@ -763,6 +829,27 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
         self.analysis_dir.mkdir(parents=True, exist_ok=True)
         self.figure_dir.mkdir(parents=True, exist_ok=True)
         self.alignment_dir.mkdir(parents=True, exist_ok=True)
+
+        self._last_phoneme_boundary_errors: list[PhonemeBoundaryError] = []
+
+    @override
+    def _get_phoneme_boundary_errors(
+        self,
+        wrd_segments: list[WordSegment],
+        matched_words: MatchedWords,
+        hyp_symbols: list[str],
+        hard_dur: list[int],
+        wav_16k_start_offset: int,
+    ) -> list[PhonemeBoundaryError]:
+        records = super()._get_phoneme_boundary_errors(
+            wrd_segments=wrd_segments,
+            matched_words=matched_words,
+            hyp_symbols=hyp_symbols,
+            hard_dur=hard_dur,
+            wav_16k_start_offset=wav_16k_start_offset,
+        )
+        self._last_phoneme_boundary_errors = records
+        return records
 
     @torch.no_grad()
     def analyze(
@@ -804,6 +891,7 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
 
         rows: list[TIMITAnalysisRow] = []
         all_boundary_errors_ms: list[float] = []
+        all_phoneme_boundary_errors: list[PhonemeBoundaryError] = []
 
         try:
             aligner.eval()
@@ -829,6 +917,7 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
                 boundary_errors_ms = [
                     float(error_sec) * 1000.0 for error_sec in result.boundary_errors
                 ]
+                all_phoneme_boundary_errors.extend(self._last_phoneme_boundary_errors)
 
                 if not boundary_errors_ms:
                     continue
@@ -879,6 +968,9 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
             self._save_analysis_figures(
                 rows=rows,
                 all_boundary_errors_ms=all_boundary_errors_ms,
+            )
+            self._save_phoneme_boundary_error_figures(
+                records=all_phoneme_boundary_errors,
             )
 
             self._save_worst_alignment_figures(
@@ -1157,6 +1249,80 @@ class TIMITErrorAnalyzer(TIMITBenchMarker):
                 dpi=200,
             )
             plt.close(fig)
+
+    def _save_phoneme_boundary_error_figures(
+        self,
+        records: list[PhonemeBoundaryError],
+    ) -> None:
+        if not records:
+            return
+
+        import matplotlib
+
+        matplotlib.use("Agg", force=True)
+        import matplotlib.pyplot as plt
+
+        def aggregate_mean_error_ms(
+            boundary_type: str | None,
+        ) -> list[tuple[str, float]]:
+            errors_by_phoneme: dict[str, list[float]] = {}
+
+            for record in records:
+                if boundary_type is not None and record.boundary_type != boundary_type:
+                    continue
+
+                errors_by_phoneme.setdefault(record.phoneme, []).append(record.error_sec * 1000.0)
+
+            aggregated = [
+                (phoneme, sum(errors_ms) / len(errors_ms))
+                for phoneme, errors_ms in errors_by_phoneme.items()
+                if errors_ms
+            ]
+            aggregated.sort(key=lambda item: item[1], reverse=True)
+            return aggregated
+
+        def save_bar_plot(
+            values: list[tuple[str, float]],
+            title: str,
+            filename: str,
+        ) -> None:
+            if not values:
+                return
+
+            phonemes = [self._pretty_token_label(phoneme) for phoneme, _ in values]
+            mean_errors_ms = [error_ms for _, error_ms in values]
+
+            fig_width = max(12.0, 0.45 * len(phonemes))
+            fig, ax = plt.subplots(figsize=(fig_width, 6.5))
+            ax.bar(phonemes, mean_errors_ms)
+            ax.set_title(title)
+            ax.set_xlabel("Phoneme")
+            ax.set_ylabel("Mean absolute boundary error (ms)")
+            ax.tick_params(axis="x", labelrotation=45)
+            ax.grid(axis="y", alpha=0.25)
+            fig.tight_layout()
+            fig.savefig(
+                self.figure_dir / filename,
+                dpi=200,
+                bbox_inches="tight",
+            )
+            plt.close(fig)
+
+        save_bar_plot(
+            aggregate_mean_error_ms("start"),
+            title="Word-start boundary error by phoneme",
+            filename="phoneme_start_boundary_error.png",
+        )
+        save_bar_plot(
+            aggregate_mean_error_ms("end"),
+            title="Word-end boundary error by phoneme",
+            filename="phoneme_end_boundary_error.png",
+        )
+        save_bar_plot(
+            aggregate_mean_error_ms(None),
+            title="Word-boundary error by phoneme (start + end)",
+            filename="phoneme_boundary_error_combined.png",
+        )
 
     @torch.no_grad()
     def _save_worst_alignment_figures(

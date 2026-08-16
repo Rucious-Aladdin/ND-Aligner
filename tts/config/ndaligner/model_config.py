@@ -119,3 +119,4 @@ class NDAlignerConfigs:
     tokenizer_type: str = TOKENIZER_TYPE
     fastspeech2_tokenizer_lexion_path = ARPA_TOKENIZER_LEXION_PATH
     separator_token_id: int = tokenizer.seperator_id
+    viterbi_ste_training: bool = True

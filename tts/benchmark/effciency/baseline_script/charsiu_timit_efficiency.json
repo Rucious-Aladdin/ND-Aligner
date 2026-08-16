@@ -1,0 +1,63 @@
+{
+  "model": "charsiu/en_w2v2_fc_10ms",
+  "device": "cuda",
+  "num_samples": 1680,
+  "num_runs": 5,
+  "warmup_samples": 200,
+  "total_audio_sec": 5186.65325,
+  "total_audio_hours": 1.4407370138888889,
+  "num_params": 94404010,
+  "params_m": 94.40401,
+  "mean_elapsed_sec": 10.866927287029103,
+  "std_elapsed_sec": 0.7698481298675461,
+  "mean_rtf": 0.0020951713490831685,
+  "std_rtf": 0.0001484286866232182,
+  "mean_utterances_per_sec": 155.166557390738,
+  "std_utterances_per_sec": 10.04056077164177,
+  "mean_peak_allocated_gb": 0.48040771484375,
+  "std_peak_allocated_gb": 0.0,
+  "mean_peak_reserved_gb": 0.86328125,
+  "std_peak_reserved_gb": 0.0,
+  "runs": [
+    {
+      "run": 1,
+      "elapsed_sec": 12.24347952613607,
+      "rtf": 0.0023605741382723183,
+      "utterances_per_sec": 137.21589491073314,
+      "peak_allocated_gb": 0.48040771484375,
+      "peak_reserved_gb": 0.86328125
+    },
+    {
+      "run": 2,
+      "elapsed_sec": 10.514658390078694,
+      "rtf": 0.0020272530056021565,
+      "utterances_per_sec": 159.77694544838434,
+      "peak_allocated_gb": 0.48040771484375,
+      "peak_reserved_gb": 0.86328125
+    },
+    {
+      "run": 3,
+      "elapsed_sec": 10.512520060874522,
+      "rtf": 0.002026840730267542,
+      "utterances_per_sec": 159.80944533486513,
+      "peak_allocated_gb": 0.48040771484375,
+      "peak_reserved_gb": 0.86328125
+    },
+    {
+      "run": 4,
+      "elapsed_sec": 10.502803255105391,
+      "rtf": 0.002024967305286003,
+      "utterances_per_sec": 159.95729513293085,
+      "peak_allocated_gb": 0.48040771484375,
+      "peak_reserved_gb": 0.86328125
+    },
+    {
+      "run": 5,
+      "elapsed_sec": 10.561175202950835,
+      "rtf": 0.0020362215659878234,
+      "utterances_per_sec": 159.0732061267766,
+      "peak_allocated_gb": 0.48040771484375,
+      "peak_reserved_gb": 0.86328125
+    }
+  ]
+}

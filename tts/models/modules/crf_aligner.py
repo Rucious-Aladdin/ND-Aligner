@@ -272,6 +272,21 @@ _VITERBI_FALLBACK_LOGGED = False
 logger = logging.getLogger(__name__)
 
 
+DECODING_STRATEGIES = {
+    "viterbi",
+    "posterior_viterbi",
+    "mea",
+}
+
+
+def validate_decoding_strategy(decoding_strategy: str) -> None:
+    if decoding_strategy not in DECODING_STRATEGIES:
+        raise ValueError(
+            f"Unknown decoding_strategy={decoding_strategy!r}. "
+            + f"Expected one of {sorted(DECODING_STRATEGIES)}."
+        )
+
+
 def _load_viterbi_library() -> ctypes.CDLL:
     """
     Load and configure the local C Viterbi shared library once.
@@ -336,10 +351,11 @@ class LinearCRFAligner(nn.Module):
     Allowed transitions have score 0.
     Disallowed transitions are excluded by the monotonic reachability mask.
 
-    Path score:
+    Standard Viterbi path score:
         S(z) = sum_t log_b[t, z_t]
 
-    where log_b is a locally normalized unary potential.
+    Posterior-based decoding can instead use log-gamma or gamma as the
+    additive node score while preserving the same monotone topology.
     """
 
     def __init__(
@@ -398,9 +414,12 @@ class LinearCRFAligner(nn.Module):
         opt_sep_mask: torch.Tensor | None = None,  # (B, T_t) or (B, 1, T_t)
         return_soft: bool = True,
         return_hard: bool = False,
+        decoding_strategy: str = "viterbi",
     ) -> tuple[torch.Tensor | None, ...]:
         if (not return_soft) and (not return_hard):
             raise RuntimeError("At least one of return_soft and return_hard must be True.")
+
+        validate_decoding_strategy(decoding_strategy)
 
         if spec_mask.dim() == 3:
             spec_mask = spec_mask.squeeze(1)
@@ -452,15 +471,23 @@ class LinearCRFAligner(nn.Module):
         ).contiguous()
 
         # ------------------------------------------------------------
-        # Optional soft path: forward-backward posterior and CRF log Z.
+        # Optional posterior computation.
+        #
+        # Posterior-based hard decoders need forward-backward even when
+        # return_soft=False. In that case the posterior is computed only
+        # internally and is not exposed through the soft-output slots.
         # ------------------------------------------------------------
-        if return_soft:
+        need_posterior = return_soft or (
+            return_hard and decoding_strategy in ("posterior_viterbi", "mea")
+        )
+
+        if need_posterior:
             (
-                gamma,
-                log_alpha,
-                log_beta,
-                log_gamma,
-                raw_log_z,
+                posterior_gamma,
+                posterior_log_alpha,
+                posterior_log_beta,
+                posterior_log_gamma,
+                posterior_raw_log_z,
             ) = self._forward_backward(
                 log_phi=log_phi,
                 mask=dp_mask,
@@ -469,20 +496,43 @@ class LinearCRFAligner(nn.Module):
                 opt_sep_mask=opt_sep_mask,
             )
 
-            gamma = gamma.masked_fill(~dp_mask, 0.0)
-            durations = gamma.sum(dim=1)
+            posterior_gamma = posterior_gamma.masked_fill(~dp_mask, 0.0)
 
             if self.unary_support_type == "bernoulli":
                 bernoulli_penalty = self.__bernoulli_negative_penalty(
                     evidence=raw_evidence,
                     mask=dp_mask,
                 )
-                raw_log_z = raw_log_z - bernoulli_penalty
+                posterior_raw_log_z = posterior_raw_log_z - bernoulli_penalty
 
-            norm_log_z = raw_log_z / spec_lengths.float()
+            posterior_norm_log_z = posterior_raw_log_z / spec_lengths.float()
         else:
-            # Hard-only mode. Soft posterior and CRF log-normalizer are intentionally
-            # skipped to avoid the forward-backward DP cost.
+            posterior_gamma = None
+            posterior_log_alpha = None
+            posterior_log_beta = None
+            posterior_log_gamma = None
+            posterior_raw_log_z = None
+            posterior_norm_log_z = None
+
+        if return_soft:
+            assert posterior_gamma is not None
+            assert posterior_log_alpha is not None
+            assert posterior_log_beta is not None
+            assert posterior_log_gamma is not None
+            assert posterior_raw_log_z is not None
+            assert posterior_norm_log_z is not None
+
+            gamma = posterior_gamma
+            log_alpha = posterior_log_alpha
+            log_beta = posterior_log_beta
+            log_gamma = posterior_log_gamma
+            raw_log_z = posterior_raw_log_z
+            norm_log_z = posterior_norm_log_z
+            durations = gamma.sum(dim=1)
+        else:
+            # Preserve the existing API contract: return_soft=False keeps the
+            # soft-output slots empty even if a posterior-based hard decoder
+            # required forward-backward internally.
             gamma = None
             log_alpha = None
             log_beta = None
@@ -507,8 +557,22 @@ class LinearCRFAligner(nn.Module):
         if not return_hard:
             return base_outputs
 
+        if decoding_strategy == "viterbi":
+            decode_score = log_phi
+        elif decoding_strategy == "posterior_viterbi":
+            assert posterior_log_gamma is not None
+            # Maximize sum_t log gamma[t, z_t].
+            decode_score = posterior_log_gamma
+        elif decoding_strategy == "mea":
+            assert posterior_gamma is not None
+            # Maximize sum_t gamma[t, z_t], i.e. expected frame accuracy
+            # under the monotone-path constraint.
+            decode_score = posterior_gamma
+        else:
+            raise RuntimeError(f"Unexpected decoding_strategy: {decoding_strategy!r}")
+
         hard_gamma, hard_durations, viterbi_path, viterbi_logp = self._viterbi_decode(
-            log_b=log_phi,
+            score=decode_score,
             dp_valid=dp_mask,
             spec_lengths=spec_lengths,
             text_lengths=text_lengths,
@@ -908,14 +972,18 @@ class LinearCRFAligner(nn.Module):
 
     def _viterbi_decode(
         self,
-        log_b: torch.Tensor,
+        score: torch.Tensor,
         dp_valid: torch.Tensor,
         spec_lengths: torch.Tensor,
         text_lengths: torch.Tensor,
         opt_sep_mask: torch.Tensor | None,
     ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         """
-        Decode with the C implementation and fall back to PyTorch on failure.
+        Decode the maximum-score legal monotone path.
+
+        ``log_b`` is retained as the historical parameter name, but the tensor
+        may contain log node potentials, log posterior marginals, or posterior
+        marginals depending on ``decoding_strategy``.
 
         The shared object is expected at:
 
@@ -925,7 +993,7 @@ class LinearCRFAligner(nn.Module):
 
         try:
             return self.__viterbi_decode_c(
-                log_b=log_b,
+                log_b=score,
                 mask=dp_valid,
                 spec_lengths=spec_lengths,
                 text_lengths=text_lengths,
@@ -939,7 +1007,7 @@ class LinearCRFAligner(nn.Module):
                 _VITERBI_FALLBACK_LOGGED = True  # type: ignore
 
             return self.__viterbi_decode_python(
-                log_b=log_b,
+                log_b=score,
                 dp_valid=dp_valid,
                 spec_lengths=spec_lengths,
                 text_lengths=text_lengths,

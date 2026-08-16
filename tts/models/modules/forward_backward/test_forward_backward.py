@@ -15,6 +15,7 @@ NEG_LARGE = -1.0e9
 # Generic helpers
 # ============================================================
 
+
 @dataclass(frozen=True)
 class Case:
     name: str
@@ -78,19 +79,10 @@ def make_rectangular_mask(
         device=text_lengths.device,
     )
 
-    spec_mask = (
-        spec_axis.unsqueeze(0)
-        < spec_lengths.unsqueeze(1)
-    )
-    text_mask = (
-        text_axis.unsqueeze(0)
-        < text_lengths.unsqueeze(1)
-    )
+    spec_mask = spec_axis.unsqueeze(0) < spec_lengths.unsqueeze(1)
+    text_mask = text_axis.unsqueeze(0) < text_lengths.unsqueeze(1)
 
-    return (
-        spec_mask.unsqueeze(2)
-        & text_mask.unsqueeze(1)
-    )
+    return spec_mask.unsqueeze(2) & text_mask.unsqueeze(1)
 
 
 def make_case_tensors(
@@ -160,9 +152,7 @@ def make_case_tensors(
         log_b = raw
         log_b[..., 0] += 50.0
     else:
-        raise ValueError(
-            f"Unknown score_mode={case.score_mode!r}."
-        )
+        raise ValueError(f"Unknown score_mode={case.score_mode!r}.")
 
     log_b = log_b.contiguous()
 
@@ -176,14 +166,9 @@ def make_case_tensors(
             dtype=torch.bool,
         )
 
-        for batch_idx, positions in enumerate(
-            case.optional_positions
-        ):
+        for batch_idx, positions in enumerate(case.optional_positions):
             for position in positions:
-                if not (
-                    0 <= position
-                    < case.text_lengths[batch_idx]
-                ):
+                if not (0 <= position < case.text_lengths[batch_idx]):
                     raise ValueError(
                         f"Invalid optional position {position} "
                         + f"for sample {batch_idx} with "
@@ -220,7 +205,7 @@ def run_cuda(
         log_beta:
             Shape: (B, T_speech, T_text)
     """
-    return MonotoneForwardBackwardCUDA.apply( # type: ignore
+    return MonotoneForwardBackwardCUDA.apply(  # type: ignore
         log_b,
         mask,
         opt_sep_mask,
@@ -256,10 +241,7 @@ def error_stats(
     Returns:
         max_abs_error, mean_abs_error, rmse
     """
-    difference = (
-        reference.double()
-        - actual.double()
-    ).abs()
+    difference = (reference.double() - actual.double()).abs()
 
     if mask is not None:
         difference = difference.masked_select(mask)
@@ -303,10 +285,7 @@ def assert_close(
     reference_compare = reference_view.double()
     actual_compare = actual_view.double()
 
-    difference = (
-        reference_compare
-        - actual_compare
-    ).abs()
+    difference = (reference_compare - actual_compare).abs()
 
     if difference.numel() == 0:
         max_abs_error = 0.0
@@ -315,17 +294,10 @@ def assert_close(
     else:
         max_abs_error = difference.max().item()
         mean_abs_error = difference.mean().item()
-        rmse = (
-            difference.square()
-            .mean()
-            .sqrt()
-            .item()
-        )
+        rmse = difference.square().mean().sqrt().item()
 
     print(
-        f"{name}: max={max_abs_error:.8e}, "
-        + f"mean={mean_abs_error:.8e}, "
-        + f"rmse={rmse:.8e}"
+        f"{name}: max={max_abs_error:.8e}, " + f"mean={mean_abs_error:.8e}, " + f"rmse={rmse:.8e}"
     )
 
     if torch.allclose(
@@ -336,17 +308,9 @@ def assert_close(
     ):
         return
 
-    allowed = (
-        atol
-        + rtol * reference_compare.abs()
-    )
+    allowed = atol + rtol * reference_compare.abs()
 
-    normalized = (
-        difference
-        / allowed.clamp_min(
-            torch.finfo(torch.float64).tiny
-        )
-    )
+    normalized = difference / allowed.clamp_min(torch.finfo(torch.float64).tiny)
 
     flat_index = normalized.argmax().item()
 
@@ -354,14 +318,15 @@ def assert_close(
         f"{name}: mismatch at flattened valid index "
         + f"{flat_index}: "
         + f"reference="
-        + f"{reference_compare.flatten()[flat_index].item()}, " # type: ignore
+        + f"{reference_compare.flatten()[flat_index].item()}, "  # type: ignore
         + f"actual="
-        + f"{actual_compare.flatten()[flat_index].item()}, " # type: ignore
+        + f"{actual_compare.flatten()[flat_index].item()}, "  # type: ignore
         + f"abs_error="
-        + f"{difference.flatten()[flat_index].item()}, " # type: ignore
+        + f"{difference.flatten()[flat_index].item()}, "  # type: ignore
         + f"allowed="
-        + f"{allowed.flatten()[flat_index].item()}." # type: ignore
+        + f"{allowed.flatten()[flat_index].item()}."  # type: ignore
     )
+
 
 def assert_exact_zero(
     name: str,
@@ -370,14 +335,14 @@ def assert_exact_zero(
     nonzero = torch.count_nonzero(tensor).item()
     if nonzero != 0:
         raise AssertionError(
-            f"{name}: expected exact zeros, "
-            + f"but found {nonzero} nonzero elements."
+            f"{name}: expected exact zeros, " + f"but found {nonzero} nonzero elements."
         )
 
 
 # ============================================================
 # Differentiable FP64 reference
 # ============================================================
+
 
 def logaddexp_pair_reference(
     first: torch.Tensor,
@@ -398,10 +363,7 @@ def logaddexp_pair_reference(
         result:
             Shape: same as first
     """
-    both_dead = (
-        (first <= neg_large)
-        & (second <= neg_large)
-    )
+    both_dead = (first <= neg_large) & (second <= neg_large)
 
     regular = torch.logaddexp(
         first,
@@ -439,10 +401,7 @@ def initial_alpha_reference(
 
     alpha_0[:, 0] = log_b[:, 0, 0]
 
-    if (
-        opt_sep_mask is not None
-        and text_size >= 2
-    ):
+    if opt_sep_mask is not None and text_size >= 2:
         alpha_0[:, 1] = torch.where(
             opt_sep_mask[:, 0],
             log_b[:, 0, 1],
@@ -516,9 +475,7 @@ def alpha_candidates_reference(
     )
 
     if text_size >= 3:
-        skip_allowed[:, 2:] = (
-            opt_sep_mask[:, 1:-1]
-        )
+        skip_allowed[:, 2:] = opt_sep_mask[:, 1:-1]
 
     skip = skip.masked_fill(
         ~skip_allowed,
@@ -561,35 +518,26 @@ def log_alpha_reference(
     alpha_steps = [alpha_t]
 
     for speech_idx in range(1, speech_size):
-        stay, advance, skip = (
-            alpha_candidates_reference(
-                alpha_t,
-                opt_sep_mask,
-                neg_large,
-            )
+        stay, advance, skip = alpha_candidates_reference(
+            alpha_t,
+            opt_sep_mask,
+            neg_large,
         )
 
-        predecessor_sum = (
-            logaddexp_pair_reference(
-                stay,
-                advance,
-                neg_large,
-            )
+        predecessor_sum = logaddexp_pair_reference(
+            stay,
+            advance,
+            neg_large,
         )
 
         if skip is not None:
-            predecessor_sum = (
-                logaddexp_pair_reference(
-                    predecessor_sum,
-                    skip,
-                    neg_large,
-                )
+            predecessor_sum = logaddexp_pair_reference(
+                predecessor_sum,
+                skip,
+                neg_large,
             )
 
-        alpha_t = (
-            log_b[:, speech_idx, :]
-            + predecessor_sum
-        )
+        alpha_t = log_b[:, speech_idx, :] + predecessor_sum
 
         alpha_t = alpha_t.masked_fill(
             ~mask[:, speech_idx, :],
@@ -665,9 +613,7 @@ def beta_candidates_reference(
     )
 
     if text_size >= 3:
-        skip_allowed[:, :-2] = (
-            opt_sep_mask[:, 1:-1]
-        )
+        skip_allowed[:, :-2] = opt_sep_mask[:, 1:-1]
 
     skip = skip.masked_fill(
         ~skip_allowed,
@@ -698,31 +644,22 @@ def log_beta_reference(
         log_beta:
             Shape: (B, T_speech, T_text)
     """
-    batch_size, speech_size, text_size = (
-        log_b.shape
-    )
+    batch_size, speech_size, text_size = log_b.shape
     device = log_b.device
 
-    spec_lengths, text_lengths = recover_lengths(
-        mask
-    )
+    spec_lengths, text_lengths = recover_lengths(mask)
 
     text_indices = torch.arange(
         text_size,
         device=device,
     ).view(1, text_size)
 
-    terminal_state = (
-        text_indices
-        == (text_lengths - 1).view(
-            batch_size,
-            1,
-        )
+    terminal_state = text_indices == (text_lengths - 1).view(
+        batch_size,
+        1,
     )
 
-    beta_steps: list[torch.Tensor | None] = (
-        [None] * speech_size
-    )
+    beta_steps: list[torch.Tensor | None] = [None] * speech_size
     beta_next: torch.Tensor | None = None
 
     for speech_idx in range(
@@ -735,10 +672,7 @@ def log_beta_reference(
             neg_large,
         )
 
-        terminal_batches = (
-            (spec_lengths - 1)
-            == speech_idx
-        )
+        terminal_batches = (spec_lengths - 1) == speech_idx
 
         base = torch.where(
             terminal_batches.view(
@@ -755,34 +689,25 @@ def log_beta_reference(
         else:
             assert beta_next is not None
 
-            next_score = (
-                log_b[:, speech_idx + 1, :]
-                + beta_next
+            next_score = log_b[:, speech_idx + 1, :] + beta_next
+
+            stay, advance, skip = beta_candidates_reference(
+                next_score,
+                opt_sep_mask,
+                neg_large,
             )
 
-            stay, advance, skip = (
-                beta_candidates_reference(
-                    next_score,
-                    opt_sep_mask,
-                    neg_large,
-                )
-            )
-
-            recursive = (
-                logaddexp_pair_reference(
-                    stay,
-                    advance,
-                    neg_large,
-                )
+            recursive = logaddexp_pair_reference(
+                stay,
+                advance,
+                neg_large,
             )
 
             if skip is not None:
-                recursive = (
-                    logaddexp_pair_reference(
-                        recursive,
-                        skip,
-                        neg_large,
-                    )
+                recursive = logaddexp_pair_reference(
+                    recursive,
+                    skip,
+                    neg_large,
                 )
 
             beta_t = torch.where(
@@ -812,6 +737,7 @@ def log_beta_reference(
 # Partition, gamma, and transition posterior
 # ============================================================
 
+
 def terminal_log_z(
     log_alpha: torch.Tensor,
     mask: torch.Tensor,
@@ -828,9 +754,7 @@ def terminal_log_z(
         log_z:
             Shape: (B,)
     """
-    spec_lengths, text_lengths = recover_lengths(
-        mask
-    )
+    spec_lengths, text_lengths = recover_lengths(mask)
     batch_indices = torch.arange(
         log_alpha.size(0),
         device=log_alpha.device,
@@ -863,21 +787,12 @@ def start_log_z(
         log_z:
             Shape: (B,)
     """
-    candidate_0 = (
-        log_b[:, 0, 0]
-        + log_beta[:, 0, 0]
-    )
+    candidate_0 = log_b[:, 0, 0] + log_beta[:, 0, 0]
 
-    if (
-        opt_sep_mask is None
-        or log_b.size(2) < 2
-    ):
+    if opt_sep_mask is None or log_b.size(2) < 2:
         return candidate_0
 
-    candidate_1 = (
-        log_b[:, 0, 1]
-        + log_beta[:, 0, 1]
-    )
+    candidate_1 = log_b[:, 0, 1] + log_beta[:, 0, 1]
 
     return torch.where(
         opt_sep_mask[:, 0],
@@ -900,11 +815,7 @@ def posterior_gamma(
         gamma:
             Shape: (B, T_speech, T_text)
     """
-    log_gamma = (
-        log_alpha
-        + log_beta
-        - log_z[:, None, None]
-    )
+    log_gamma = log_alpha + log_beta - log_z[:, None, None]
 
     gamma = torch.exp(log_gamma)
     return gamma.masked_fill(
@@ -938,9 +849,7 @@ def transition_posterior(
 
     Destination index k is used on the final axis.
     """
-    batch_size, speech_size, text_size = (
-        log_b.shape
-    )
+    batch_size, speech_size, text_size = log_b.shape
 
     xi_stay = log_b.new_zeros(
         batch_size,
@@ -953,43 +862,21 @@ def transition_posterior(
     if speech_size <= 1:
         return xi_stay, xi_advance, xi_skip
 
-    destination_score = (
-        log_b[:, 1:, :]
-        + log_beta[:, 1:, :]
-    )
+    destination_score = log_b[:, 1:, :] + log_beta[:, 1:, :]
 
     # stay: j -> j, destination k=j
-    stay_log = (
-        log_alpha[:, :-1, :]
-        + destination_score
-        - log_z[:, None, None]
-    )
+    stay_log = log_alpha[:, :-1, :] + destination_score - log_z[:, None, None]
     xi_stay = torch.exp(stay_log)
 
     # advance: j=k-1 -> k
     if text_size >= 2:
-        advance_log = (
-            log_alpha[:, :-1, :-1]
-            + destination_score[:, :, 1:]
-            - log_z[:, None, None]
-        )
-        xi_advance[:, :, 1:] = torch.exp(
-            advance_log
-        )
+        advance_log = log_alpha[:, :-1, :-1] + destination_score[:, :, 1:] - log_z[:, None, None]
+        xi_advance[:, :, 1:] = torch.exp(advance_log)
 
     # optional skip: j=k-2 -> k
-    if (
-        opt_sep_mask is not None
-        and text_size >= 3
-    ):
-        skip_allowed = (
-            opt_sep_mask[:, 1:-1]
-        )
-        skip_log = (
-            log_alpha[:, :-1, :-2]
-            + destination_score[:, :, 2:]
-            - log_z[:, None, None]
-        )
+    if opt_sep_mask is not None and text_size >= 3:
+        skip_allowed = opt_sep_mask[:, 1:-1]
+        skip_log = log_alpha[:, :-1, :-2] + destination_score[:, :, 2:] - log_z[:, None, None]
         skip_values = torch.exp(skip_log)
         xi_skip[:, :, 2:] = torch.where(
             skip_allowed[:, None, :],
@@ -997,36 +884,23 @@ def transition_posterior(
             torch.zeros_like(skip_values),
         )
 
-    transition_mask = (
-        mask[:, :-1, :]
-        & mask[:, 1:, :]
-    )
+    transition_mask = mask[:, :-1, :] & mask[:, 1:, :]
     xi_stay = xi_stay.masked_fill(
         ~transition_mask,
         0.0,
     )
 
-    advance_mask = torch.zeros_like(
-        transition_mask
-    )
+    advance_mask = torch.zeros_like(transition_mask)
     if text_size >= 2:
-        advance_mask[:, :, 1:] = (
-            mask[:, :-1, :-1]
-            & mask[:, 1:, 1:]
-        )
+        advance_mask[:, :, 1:] = mask[:, :-1, :-1] & mask[:, 1:, 1:]
     xi_advance = xi_advance.masked_fill(
         ~advance_mask,
         0.0,
     )
 
-    skip_mask = torch.zeros_like(
-        transition_mask
-    )
+    skip_mask = torch.zeros_like(transition_mask)
     if text_size >= 3:
-        skip_mask[:, :, 2:] = (
-            mask[:, :-1, :-2]
-            & mask[:, 1:, 2:]
-        )
+        skip_mask[:, :, 2:] = mask[:, :-1, :-2] & mask[:, 1:, 2:]
     xi_skip = xi_skip.masked_fill(
         ~skip_mask,
         0.0,
@@ -1039,6 +913,7 @@ def transition_posterior(
 # Exhaustive path enumeration for tiny cases
 # ============================================================
 
+
 def successors(
     state: int,
     text_length: int,
@@ -1049,11 +924,7 @@ def successors(
     if state + 1 < text_length:
         result.append(state + 1)
 
-    if (
-        state + 2 < text_length
-        and opt_sep is not None
-        and bool(opt_sep[state + 1].item())
-    ):
+    if state + 2 < text_length and opt_sep is not None and bool(opt_sep[state + 1].item()):
         result.append(state + 2)
 
     return tuple(result)
@@ -1072,11 +943,7 @@ def enumerate_paths(
     """
     starts = [0]
 
-    if (
-        text_length >= 2
-        and opt_sep is not None
-        and bool(opt_sep[0].item())
-    ):
+    if text_length >= 2 and opt_sep is not None and bool(opt_sep[0].item()):
         starts.append(1)
 
     paths: list[tuple[int, ...]] = []
@@ -1145,24 +1012,14 @@ def exhaustive_log_z_gamma(
         )
 
     path_scores = torch.stack(
-        [
-            torch.stack(
-                [
-                    log_b[t, state]
-                    for t, state in enumerate(path)
-                ]
-            ).sum()
-            for path in paths
-        ]
+        [torch.stack([log_b[t, state] for t, state in enumerate(path)]).sum() for path in paths]
     )
 
     log_z = torch.logsumexp(
         path_scores,
         dim=0,
     )
-    probabilities = torch.exp(
-        path_scores - log_z
-    )
+    probabilities = torch.exp(path_scores - log_z)
 
     gamma = log_b.new_zeros(
         speech_size,
@@ -1171,9 +1028,7 @@ def exhaustive_log_z_gamma(
 
     for path_idx, path in enumerate(paths):
         for speech_idx, state in enumerate(path):
-            gamma[speech_idx, state] += (
-                probabilities[path_idx]
-            )
+            gamma[speech_idx, state] += probabilities[path_idx]
 
     return log_z, gamma, len(paths)
 
@@ -1182,6 +1037,7 @@ def exhaustive_log_z_gamma(
 # Mathematical consistency tests
 # ============================================================
 
+
 @torch.no_grad()
 def test_forward_reference(
     case: Case,
@@ -1189,12 +1045,10 @@ def test_forward_reference(
 ) -> None:
     print(f"\n[forward/reference] {case.name}")
 
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
 
     alpha_cuda, beta_cuda = run_cuda(
@@ -1231,14 +1085,8 @@ def test_forward_reference(
         rtol=3.0e-5,
     )
 
-    assert torch.all(
-        alpha_cuda.masked_select(~mask)
-        == NEG_LARGE
-    )
-    assert torch.all(
-        beta_cuda.masked_select(~mask)
-        == NEG_LARGE
-    )
+    assert torch.all(alpha_cuda.masked_select(~mask) == NEG_LARGE)
+    assert torch.all(beta_cuda.masked_select(~mask) == NEG_LARGE)
 
 
 @torch.no_grad()
@@ -1248,12 +1096,10 @@ def test_partition_and_gamma(
 ) -> None:
     print(f"\n[math/partition-gamma] {case.name}")
 
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
     alpha, beta = run_cuda(
         log_b,
@@ -1289,9 +1135,7 @@ def test_partition_and_gamma(
     spec_lengths, _ = recover_lengths(mask)
 
     for batch_idx in range(log_b.size(0)):
-        spec_length = int(
-            spec_lengths[batch_idx].item()
-        )
+        spec_length = int(spec_lengths[batch_idx].item())
 
         row_sums = gamma[
             batch_idx,
@@ -1323,9 +1167,7 @@ def test_partition_and_gamma(
 
         assert_close(
             f"logZ constant over time sample={batch_idx}",
-            log_z_terminal[batch_idx].expand_as(
-                log_z_by_row
-            ),
+            log_z_terminal[batch_idx].expand_as(log_z_by_row),
             log_z_by_row,
             atol=1.0e-4,
             rtol=1.0e-4,
@@ -1339,12 +1181,10 @@ def test_transition_posterior(
 ) -> None:
     print(f"\n[math/transition-posterior] {case.name}")
 
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
     alpha, beta = run_cuda(
         log_b,
@@ -1359,33 +1199,21 @@ def test_transition_posterior(
         mask,
     )
 
-    xi_stay, xi_advance, xi_skip = (
-        transition_posterior(
-            alpha,
-            log_b,
-            beta,
-            log_z,
-            mask,
-            opt_sep_mask,
-        )
+    xi_stay, xi_advance, xi_skip = transition_posterior(
+        alpha,
+        log_b,
+        beta,
+        log_z,
+        mask,
+        opt_sep_mask,
     )
-    xi_total = (
-        xi_stay
-        + xi_advance
-        + xi_skip
-    )
+    xi_total = xi_stay + xi_advance + xi_skip
 
-    spec_lengths, text_lengths = recover_lengths(
-        mask
-    )
+    spec_lengths, text_lengths = recover_lengths(mask)
 
     for batch_idx in range(log_b.size(0)):
-        spec_length = int(
-            spec_lengths[batch_idx].item()
-        )
-        text_length = int(
-            text_lengths[batch_idx].item()
-        )
+        spec_length = int(spec_lengths[batch_idx].item())
+        text_length = int(text_lengths[batch_idx].item())
 
         if spec_length <= 1:
             continue
@@ -1393,7 +1221,7 @@ def test_transition_posterior(
         # Total transition posterior at each boundary.
         total_mass = xi_total[
             batch_idx,
-            :spec_length - 1,
+            : spec_length - 1,
             :text_length,
         ].sum(dim=-1)
 
@@ -1414,21 +1242,21 @@ def test_transition_posterior(
         )
         outgoing += xi_stay[
             batch_idx,
-            :spec_length - 1,
+            : spec_length - 1,
             :text_length,
         ]
 
         if text_length >= 2:
             outgoing[:, :-1] += xi_advance[
                 batch_idx,
-                :spec_length - 1,
+                : spec_length - 1,
                 1:text_length,
             ]
 
         if text_length >= 3:
             outgoing[:, :-2] += xi_skip[
                 batch_idx,
-                :spec_length - 1,
+                : spec_length - 1,
                 2:text_length,
             ]
 
@@ -1436,7 +1264,7 @@ def test_transition_posterior(
             f"xi outgoing vs gamma sample={batch_idx}",
             gamma[
                 batch_idx,
-                :spec_length - 1,
+                : spec_length - 1,
                 :text_length,
             ],
             outgoing,
@@ -1447,7 +1275,7 @@ def test_transition_posterior(
         # Incoming transition mass equals gamma[t+1, k].
         incoming = xi_total[
             batch_idx,
-            :spec_length - 1,
+            : spec_length - 1,
             :text_length,
         ]
 
@@ -1501,12 +1329,10 @@ def test_exhaustive_enumeration(
     )
 
     for case in tiny_cases:
-        log_b, mask, opt_sep_mask = (
-            make_case_tensors(
-                case,
-                device,
-                torch.float64,
-            )
+        log_b, mask, opt_sep_mask = make_case_tensors(
+            case,
+            device,
+            torch.float64,
         )
 
         alpha_ref = log_alpha_reference(
@@ -1530,21 +1356,13 @@ def test_exhaustive_enumeration(
             mask,
         )[0]
 
-        opt_sep_single = (
-            None
-            if opt_sep_mask is None
-            else opt_sep_mask[0]
-        )
-        log_z_enum, gamma_enum, num_paths = (
-            exhaustive_log_z_gamma(
-                log_b[0],
-                opt_sep_single,
-            )
+        opt_sep_single = None if opt_sep_mask is None else opt_sep_mask[0]
+        log_z_enum, gamma_enum, num_paths = exhaustive_log_z_gamma(
+            log_b[0],
+            opt_sep_single,
         )
 
-        print(
-            f"{case.name}: enumerated paths={num_paths}"
-        )
+        print(f"{case.name}: enumerated paths={num_paths}")
 
         assert_close(
             f"{case.name} exhaustive logZ",
@@ -1565,6 +1383,7 @@ def test_exhaustive_enumeration(
 # ============================================================
 # Backward tests
 # ============================================================
+
 
 def fp64_reference_gradient(
     branch: str,
@@ -1588,12 +1407,7 @@ def fp64_reference_gradient(
         grad_log_b_fp64:
             Shape: (B, T_speech, T_text)
     """
-    log_b_fp64 = (
-        log_b_fp32.detach()
-        .double()
-        .clone()
-        .requires_grad_(True)
-    )
+    log_b_fp64 = log_b_fp32.detach().double().clone().requires_grad_(True)
 
     if branch == "alpha":
         # output:
@@ -1612,9 +1426,7 @@ def fp64_reference_gradient(
             opt_sep_mask,
         )
     else:
-        raise ValueError(
-            f"Unknown branch={branch!r}."
-        )
+        raise ValueError(f"Unknown branch={branch!r}.")
 
     # 예: T_speech == 1인 beta는 terminal constant만 포함하므로
     # log_b와 계산 그래프가 전혀 연결되지 않는다.
@@ -1648,11 +1460,7 @@ def cuda_branch_gradient(
         grad_log_b:
             Shape: (B, T_speech, T_text)
     """
-    log_b = (
-        log_b_fp32.detach()
-        .clone()
-        .requires_grad_(True)
-    )
+    log_b = log_b_fp32.detach().clone().requires_grad_(True)
 
     alpha, beta = run_cuda(
         log_b,
@@ -1679,30 +1487,36 @@ def test_backward_reference(
 ) -> None:
     print(f"\n[backward/reference] {case.name}")
 
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
 
     generator = torch.Generator(device=device)
     generator.manual_seed(case.seed + 10000)
 
-    upstream_alpha = torch.randn(
-        log_b.shape,
-        device=device,
-        dtype=torch.float32,
-        generator=generator,
-    ).masked_fill(~mask, 0.0).contiguous()
+    upstream_alpha = (
+        torch.randn(
+            log_b.shape,
+            device=device,
+            dtype=torch.float32,
+            generator=generator,
+        )
+        .masked_fill(~mask, 0.0)
+        .contiguous()
+    )
 
-    upstream_beta = torch.randn(
-        log_b.shape,
-        device=device,
-        dtype=torch.float32,
-        generator=generator,
-    ).masked_fill(~mask, 0.0).contiguous()
+    upstream_beta = (
+        torch.randn(
+            log_b.shape,
+            device=device,
+            dtype=torch.float32,
+            generator=generator,
+        )
+        .masked_fill(~mask, 0.0)
+        .contiguous()
+    )
 
     for branch, upstream in (
         ("alpha", upstream_alpha),
@@ -1738,11 +1552,7 @@ def test_backward_reference(
         )
 
     # Branch additivity.
-    log_b_joint = (
-        log_b.detach()
-        .clone()
-        .requires_grad_(True)
-    )
+    log_b_joint = log_b.detach().clone().requires_grad_(True)
     alpha_joint, beta_joint = run_cuda(
         log_b_joint,
         mask,
@@ -1787,12 +1597,10 @@ def test_backward_structural_zeros(
 ) -> None:
     print(f"\n[backward/structural-zeros] {case.name}")
 
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
 
     zero_upstream = torch.zeros_like(log_b)
@@ -1821,9 +1629,7 @@ def test_backward_structural_zeros(
         grad_beta_zero,
     )
 
-    random_upstream = torch.randn_like(
-        log_b
-    ).masked_fill(~mask, 0.0)
+    random_upstream = torch.randn_like(log_b).masked_fill(~mask, 0.0)
 
     grad_beta = cuda_branch_gradient(
         "beta",
@@ -1847,13 +1653,9 @@ def test_backward_structural_zeros(
         random_upstream,
     )
 
-    _spec_lengths, text_lengths = recover_lengths(
-        mask
-    )
+    _spec_lengths, text_lengths = recover_lengths(mask)
     for batch_idx in range(log_b.size(0)):
-        text_length = int(
-            text_lengths[batch_idx].item()
-        )
+        text_length = int(text_lengths[batch_idx].item())
 
         allowed = torch.zeros(
             text_length,
@@ -1865,9 +1667,7 @@ def test_backward_structural_zeros(
         if (
             text_length >= 2
             and opt_sep_mask is not None
-            and bool(
-                opt_sep_mask[batch_idx, 0].item()
-            )
+            and bool(opt_sep_mask[batch_idx, 0].item())
         ):
             allowed[1] = True
 
@@ -1887,20 +1687,14 @@ def test_logz_gradient_equals_gamma(
 ) -> None:
     print(f"\n[backward/logZ-gradient=gamma] {case.name}")
 
-    log_b_base, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b_base, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
 
     # Alpha terminal construction.
-    log_b_alpha = (
-        log_b_base.detach()
-        .clone()
-        .requires_grad_(True)
-    )
+    log_b_alpha = log_b_base.detach().clone().requires_grad_(True)
     alpha, beta = run_cuda(
         log_b_alpha,
         mask,
@@ -1933,11 +1727,7 @@ def test_logz_gradient_equals_gamma(
 
     # Beta start construction. This includes the direct first-row
     # log_b term outside the beta kernel.
-    log_b_beta = (
-        log_b_base.detach()
-        .clone()
-        .requires_grad_(True)
-    )
+    log_b_beta = log_b_base.detach().clone().requires_grad_(True)
     alpha_2, beta_2 = run_cuda(
         log_b_beta,
         mask,
@@ -1969,9 +1759,11 @@ def test_logz_gradient_equals_gamma(
         rtol=2.0e-4,
     )
 
+
 # ============================================================
 # Batch, padding, reachability, and determinism
 # ============================================================
+
 
 @torch.no_grad()
 def test_batched_vs_single(
@@ -1980,12 +1772,10 @@ def test_batched_vs_single(
 ) -> None:
     print(f"\n[batch/batched-vs-single] {case.name}")
 
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
     alpha_batch, beta_batch = run_cuda(
         log_b,
@@ -1993,20 +1783,14 @@ def test_batched_vs_single(
         opt_sep_mask,
     )
 
-    spec_lengths, text_lengths = recover_lengths(
-        mask
-    )
+    spec_lengths, text_lengths = recover_lengths(mask)
 
     for batch_idx in range(log_b.size(0)):
-        spec_length = int(
-            spec_lengths[batch_idx].item()
-        )
-        text_length = int(
-            text_lengths[batch_idx].item()
-        )
+        spec_length = int(spec_lengths[batch_idx].item())
+        text_length = int(text_lengths[batch_idx].item())
 
         single_log_b = log_b[
-            batch_idx:batch_idx + 1,
+            batch_idx : batch_idx + 1,
             :spec_length,
             :text_length,
         ].contiguous()
@@ -2018,7 +1802,7 @@ def test_batched_vs_single(
             None
             if opt_sep_mask is None
             else opt_sep_mask[
-                batch_idx:batch_idx + 1,
+                batch_idx : batch_idx + 1,
                 :text_length,
             ].contiguous()
         )
@@ -2032,7 +1816,7 @@ def test_batched_vs_single(
         assert_close(
             f"alpha batched vs single sample={batch_idx}",
             alpha_batch[
-                batch_idx:batch_idx + 1,
+                batch_idx : batch_idx + 1,
                 :spec_length,
                 :text_length,
             ],
@@ -2043,7 +1827,7 @@ def test_batched_vs_single(
         assert_close(
             f"beta batched vs single sample={batch_idx}",
             beta_batch[
-                batch_idx:batch_idx + 1,
+                batch_idx : batch_idx + 1,
                 :spec_length,
                 :text_length,
             ],
@@ -2059,19 +1843,14 @@ def test_padding_invariance(
 ) -> None:
     print(f"\n[padding/invariance] {case.name}")
 
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
 
     changed = log_b.clone()
-    changed[~mask] = (
-        torch.randn_like(changed[~mask])
-        * 1000.0
-    )
+    changed[~mask] = torch.randn_like(changed[~mask]) * 1000.0
 
     alpha_a, beta_a = run_cuda(
         log_b,
@@ -2101,21 +1880,13 @@ def test_padding_invariance(
         rtol=0.0,
     )
 
-    upstream_alpha = torch.randn_like(
-        log_b
-    ).masked_fill(~mask, 0.0)
-    upstream_beta = torch.randn_like(
-        log_b
-    ).masked_fill(~mask, 0.0)
+    upstream_alpha = torch.randn_like(log_b).masked_fill(~mask, 0.0)
+    upstream_beta = torch.randn_like(log_b).masked_fill(~mask, 0.0)
 
     def total_gradient(
         values: torch.Tensor,
     ) -> torch.Tensor:
-        x = (
-            values.detach()
-            .clone()
-            .requires_grad_(True)
-        )
+        x = values.detach().clone().requires_grad_(True)
         alpha, beta = run_cuda(
             x,
             mask,
@@ -2162,12 +1933,10 @@ def test_reachability(
         optional_positions=None,
         seed=400,
     )
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
     alpha, beta = run_cuda(
         log_b,
@@ -2181,25 +1950,17 @@ def test_reachability(
             unreachable = alpha[
                 0,
                 speech_idx,
-                speech_idx + 1:,
+                speech_idx + 1 :,
             ]
-            if not torch.all(
-                unreachable == NEG_LARGE
-            ):
-                raise AssertionError(
-                    "Alpha reachability invariant failed."
-                )
+            if not torch.all(unreachable == NEG_LARGE):
+                raise AssertionError("Alpha reachability invariant failed.")
 
     # From state j at time t, reaching N-1 requires at least
     # N-1-j advances. If not enough speech steps remain, beta is dead.
     for speech_idx in range(case.speech_size):
-        remaining_steps = (
-            case.speech_size - 1 - speech_idx
-        )
+        remaining_steps = case.speech_size - 1 - speech_idx
         for text_idx in range(case.text_size):
-            needed_advances = (
-                case.text_size - 1 - text_idx
-            )
+            needed_advances = case.text_size - 1 - text_idx
             if needed_advances > remaining_steps:
                 if (
                     beta[
@@ -2210,8 +1971,7 @@ def test_reachability(
                     != NEG_LARGE
                 ):
                     raise AssertionError(
-                        "Beta reachability invariant failed "
-                        + f"at t={speech_idx}, j={text_idx}."
+                        "Beta reachability invariant failed " + f"at t={speech_idx}, j={text_idx}."
                     )
 
     log_z = terminal_log_z(alpha, mask)
@@ -2222,10 +1982,7 @@ def test_reachability(
         mask,
     )
 
-    dead = (
-        (alpha <= NEG_LARGE)
-        | (beta <= NEG_LARGE)
-    )
+    dead = (alpha <= NEG_LARGE) | (beta <= NEG_LARGE)
     assert_exact_zero(
         "unreachable gamma",
         gamma.masked_select(dead),
@@ -2246,12 +2003,10 @@ def test_determinism(
     #
     # opt_sep_mask:
     # Shape: (B, T_text), or None
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
 
     with torch.no_grad():
@@ -2280,36 +2035,26 @@ def test_determinism(
 
             if not torch.equal(alpha_0, alpha_i):
                 raise AssertionError(
-                    "Alpha is not bitwise deterministic "
-                    + f"at repetition {repetition}."
+                    "Alpha is not bitwise deterministic " + f"at repetition {repetition}."
                 )
 
             if not torch.equal(beta_0, beta_i):
                 raise AssertionError(
-                    "Beta is not bitwise deterministic "
-                    + f"at repetition {repetition}."
+                    "Beta is not bitwise deterministic " + f"at repetition {repetition}."
                 )
 
     # upstream_alpha:
     # Shape: (B, T_speech, T_text)
-    upstream_alpha = torch.randn_like(
-        log_b
-    ).masked_fill(~mask, 0.0)
+    upstream_alpha = torch.randn_like(log_b).masked_fill(~mask, 0.0)
 
     # upstream_beta:
     # Shape: (B, T_speech, T_text)
-    upstream_beta = torch.randn_like(
-        log_b
-    ).masked_fill(~mask, 0.0)
+    upstream_beta = torch.randn_like(log_b).masked_fill(~mask, 0.0)
 
     def gradient_once() -> torch.Tensor:
         # x:
         # Shape: (B, T_speech, T_text)
-        x = (
-            log_b.detach()
-            .clone()
-            .requires_grad_(True)
-        )
+        x = log_b.detach().clone().requires_grad_(True)
 
         # alpha:
         # Shape: (B, T_speech, T_text)
@@ -2349,14 +2094,14 @@ def test_determinism(
             gradient_i,
         ):
             raise AssertionError(
-                "Backward is not bitwise deterministic "
-                + f"at repetition {repetition}."
+                "Backward is not bitwise deterministic " + f"at repetition {repetition}."
             )
 
 
 # ============================================================
 # Numerical stability
 # ============================================================
+
 
 def test_numerical_stability(
     device: torch.device,
@@ -2386,12 +2131,10 @@ def test_numerical_stability(
             seed=500 + mode_idx,
         )
 
-        log_b, mask, opt_sep_mask = (
-            make_case_tensors(
-                case,
-                device,
-                torch.float32,
-            )
+        log_b, mask, opt_sep_mask = make_case_tensors(
+            case,
+            device,
+            torch.float32,
         )
 
         log_b = log_b.requires_grad_(True)
@@ -2405,28 +2148,16 @@ def test_numerical_stability(
         valid_beta = beta.masked_select(mask)
 
         if torch.isnan(valid_alpha).any():
-            raise AssertionError(
-                f"{mode}: alpha contains NaN."
-            )
+            raise AssertionError(f"{mode}: alpha contains NaN.")
         if torch.isnan(valid_beta).any():
-            raise AssertionError(
-                f"{mode}: beta contains NaN."
-            )
+            raise AssertionError(f"{mode}: beta contains NaN.")
         if torch.isposinf(valid_alpha).any():
-            raise AssertionError(
-                f"{mode}: alpha contains +inf."
-            )
+            raise AssertionError(f"{mode}: alpha contains +inf.")
         if torch.isposinf(valid_beta).any():
-            raise AssertionError(
-                f"{mode}: beta contains +inf."
-            )
+            raise AssertionError(f"{mode}: beta contains +inf.")
 
-        upstream_alpha = torch.randn_like(
-            alpha
-        ).masked_fill(~mask, 0.0)
-        upstream_beta = torch.randn_like(
-            beta
-        ).masked_fill(~mask, 0.0)
+        upstream_alpha = torch.randn_like(alpha).masked_fill(~mask, 0.0)
+        upstream_beta = torch.randn_like(beta).masked_fill(~mask, 0.0)
 
         gradient = torch.autograd.grad(
             outputs=(alpha, beta),
@@ -2438,9 +2169,7 @@ def test_numerical_stability(
         )[0]
 
         if not torch.isfinite(gradient).all():
-            raise AssertionError(
-                f"{mode}: backward contains nonfinite values."
-            )
+            raise AssertionError(f"{mode}: backward contains nonfinite values.")
 
         print(f"{mode}: passed")
 
@@ -2448,6 +2177,7 @@ def test_numerical_stability(
 # ============================================================
 # Performance
 # ============================================================
+
 
 def benchmark_cuda(
     function: Callable[[], object],
@@ -2464,12 +2194,8 @@ def benchmark_cuda(
 
     synchronize()
 
-    start = torch.cuda.Event(
-        enable_timing=True
-    )
-    end = torch.cuda.Event(
-        enable_timing=True
-    )
+    start = torch.cuda.Event(enable_timing=True)
+    end = torch.cuda.Event(enable_timing=True)
 
     start.record()
     for _ in range(iterations):
@@ -2478,10 +2204,7 @@ def benchmark_cuda(
 
     synchronize()
 
-    return (
-        start.elapsed_time(end)
-        / iterations
-    )
+    return start.elapsed_time(end) / iterations
 
 
 def benchmark_wall_clock(
@@ -2506,9 +2229,7 @@ def benchmark_wall_clock(
     synchronize()
     elapsed = perf_counter() - start
 
-    return (
-        elapsed * 1000.0 / iterations
-    )
+    return elapsed * 1000.0 / iterations
 
 
 def benchmark_case(
@@ -2519,15 +2240,17 @@ def benchmark_case(
 ) -> None:
     print(f"\n[benchmark] {case.name}")
 
-    log_b, mask, opt_sep_mask = (
-        make_case_tensors(
-            case,
-            device,
-            torch.float32,
-        )
+    log_b, mask, opt_sep_mask = make_case_tensors(
+        case,
+        device,
+        torch.float32,
     )
 
-    def cuda_forward() -> tuple[
+    # ============================================================
+    # DP computation only
+    # ============================================================
+
+    def cuda_dp() -> tuple[
         torch.Tensor,
         torch.Tensor,
     ]:
@@ -2537,7 +2260,7 @@ def benchmark_case(
             opt_sep_mask,
         )
 
-    def reference_forward() -> tuple[
+    def reference_dp() -> tuple[
         torch.Tensor,
         torch.Tensor,
     ]:
@@ -2554,8 +2277,8 @@ def benchmark_case(
             ),
         )
 
-    cuda_forward_ms = benchmark_cuda(
-        cuda_forward,
+    cuda_dp_ms = benchmark_wall_clock(
+        cuda_dp,
         warmup=warmup,
         iterations=iterations,
     )
@@ -2564,96 +2287,106 @@ def benchmark_case(
         3,
         iterations // 10,
     )
-    reference_forward_ms = benchmark_wall_clock(
-        reference_forward,
+
+    reference_dp_ms = benchmark_wall_clock(
+        reference_dp,
         warmup=1,
         iterations=reference_iterations,
     )
 
-    upstream_alpha = torch.randn_like(
-        log_b
-    ).masked_fill(~mask, 0.0)
-    upstream_beta = torch.randn_like(
-        log_b
-    ).masked_fill(~mask, 0.0)
+    # ============================================================
+    # DP computation + autograd
+    # ============================================================
 
-    def cuda_alpha_backward() -> torch.Tensor:
-        x = (
-            log_b.detach()
-            .clone()
-            .requires_grad_(True)
-        )
-        alpha, _ = run_cuda(
+    upstream_alpha = torch.randn_like(log_b).masked_fill(~mask, 0.0)
+
+    upstream_beta = torch.randn_like(log_b).masked_fill(~mask, 0.0)
+
+    def cuda_dp_autograd() -> torch.Tensor:
+        x = log_b.detach().clone().requires_grad_(True)
+
+        alpha, beta = run_cuda(
             x,
             mask,
             opt_sep_mask,
         )
+
         return torch.autograd.grad(
-            alpha,
-            x,
-            upstream_alpha,
+            outputs=(alpha, beta),
+            inputs=x,
+            grad_outputs=(
+                upstream_alpha,
+                upstream_beta,
+            ),
+            retain_graph=False,
+            create_graph=False,
         )[0]
 
-    def cuda_beta_backward() -> torch.Tensor:
-        x = (
-            log_b.detach()
-            .clone()
-            .requires_grad_(True)
-        )
-        _, beta = run_cuda(
+    def reference_dp_autograd() -> torch.Tensor:
+        x = log_b.detach().clone().requires_grad_(True)
+
+        alpha = log_alpha_reference(
             x,
             mask,
             opt_sep_mask,
         )
-        return torch.autograd.grad(
-            beta,
+        beta = log_beta_reference(
             x,
-            upstream_beta,
+            mask,
+            opt_sep_mask,
+        )
+
+        return torch.autograd.grad(
+            outputs=(alpha, beta),
+            inputs=x,
+            grad_outputs=(
+                upstream_alpha,
+                upstream_beta,
+            ),
+            retain_graph=False,
+            create_graph=False,
         )[0]
 
-    alpha_backward_ms = benchmark_wall_clock(
-        cuda_alpha_backward,
-        warmup=max(2, warmup // 2),
-        iterations=max(5, iterations // 4),
-    )
-    beta_backward_ms = benchmark_wall_clock(
-        cuda_beta_backward,
+    # 대표 configuration에서만 reference autograd benchmark.
+    run_autograd_benchmark = log_b.size(0) == 1 and log_b.size(1) == 500 and log_b.size(2) == 100
+
+    cuda_autograd_ms = benchmark_wall_clock(
+        cuda_dp_autograd,
         warmup=max(2, warmup // 2),
         iterations=max(5, iterations // 4),
     )
 
-    print(
-        f"shape: B={log_b.size(0)}, "
-        + f"T={log_b.size(1)}, "
-        + f"N={log_b.size(2)}"
-    )
-    print(
-        f"reference forward: "
-        + f"{reference_forward_ms:.3f} ms"
-    )
-    print(
-        f"CUDA forward:      "
-        + f"{cuda_forward_ms:.3f} ms"
-    )
-    print(
-        f"forward speedup:    "
-        + f"{reference_forward_ms / cuda_forward_ms:.2f}x"
-    )
-    print(
-        f"CUDA alpha backward "
-        + f"(forward+autograd): "
-        + f"{alpha_backward_ms:.3f} ms"
-    )
-    print(
-        f"CUDA beta backward  "
-        + f"(forward+autograd): "
-        + f"{beta_backward_ms:.3f} ms"
-    )
+    # ============================================================
+    # Print
+    # ============================================================
+
+    print(f"shape: B={log_b.size(0)}, " + f"T={log_b.size(1)}, " + f"N={log_b.size(2)}")
+
+    print(f"reference DP (alpha+beta): " + f"{reference_dp_ms:.3f} ms")
+    print(f"CUDA DP      (alpha+beta): " + f"{cuda_dp_ms:.3f} ms")
+    print(f"DP speedup:               " + f"{reference_dp_ms / cuda_dp_ms:.2f}x")
+
+    if run_autograd_benchmark:
+        reference_autograd_ms = benchmark_wall_clock(
+            reference_dp_autograd,
+            warmup=1,
+            iterations=max(
+                1,
+                iterations // 20,
+            ),
+        )
+
+        print(f"reference DP + autograd:   " + f"{reference_autograd_ms:.3f} ms")
+        print(f"CUDA DP + autograd:        " + f"{cuda_autograd_ms:.3f} ms")
+        print(f"autograd speedup:          " + f"{reference_autograd_ms / cuda_autograd_ms:.2f}x")
+    else:
+        print(f"CUDA DP + autograd:        " + f"{cuda_autograd_ms:.3f} ms")
 
 
 # ============================================================
 # Test suite
 # ============================================================
+
 
 def correctness_cases() -> tuple[Case, ...]:
     return (
@@ -2748,9 +2481,7 @@ def benchmark_cases() -> tuple[Case, ...]:
             text_lengths=(100,),
             speech_size=500,
             text_size=100,
-            optional_positions=(
-                tuple(range(10, 100, 15)),
-            ),
+            optional_positions=(tuple(range(10, 100, 15)),),
             seed=1001,
         ),
         Case(
@@ -2794,22 +2525,13 @@ def benchmark_cases() -> tuple[Case, ...]:
         ),
         Case(
             name="benchmark_B32_T1000_N200",
-            spec_lengths=tuple(
-                1000 - 7 * index
-                for index in range(32)
-            ),
-            text_lengths=tuple(
-                200 - 3 * (index % 20)
-                for index in range(32)
-            ),
+            spec_lengths=tuple(1000 - 7 * index for index in range(32)),
+            text_lengths=tuple(200 - 3 * (index % 20) for index in range(32)),
             speech_size=1000,
             text_size=200,
             optional_positions=tuple(
                 tuple(range(15, length, 23))
-                for length in tuple(
-                    200 - 3 * (index % 20)
-                    for index in range(32)
-                )
+                for length in tuple(200 - 3 * (index % 20) for index in range(32))
             ),
             seed=1003,
         ),
@@ -2901,18 +2623,14 @@ def main() -> None:
     args = parser.parse_args()
 
     if not torch.cuda.is_available():
-        raise RuntimeError(
-            "CUDA is not available."
-        )
+        raise RuntimeError("CUDA is not available.")
 
     device = torch.device(args.device)
 
     if device.type != "cuda":
-        raise ValueError(
-            f"--device must be a CUDA device, but received {device}."
-        )
+        raise ValueError(f"--device must be a CUDA device, but received {device}.")
 
-    if device.index is None: # type: ignore
+    if device.index is None:  # type: ignore
         device = torch.device(
             "cuda",
             torch.cuda.current_device(),
@@ -2925,12 +2643,10 @@ def main() -> None:
 
     # Trigger extension compilation/loading outside benchmarks.
     smoke_case = correctness_cases()[0]
-    smoke_log_b, smoke_mask, smoke_opt = (
-        make_case_tensors(
-            smoke_case,
-            device,
-            torch.float32,
-        )
+    smoke_log_b, smoke_mask, smoke_opt = make_case_tensors(
+        smoke_case,
+        device,
+        torch.float32,
     )
     run_cuda(
         smoke_log_b,
@@ -2941,9 +2657,7 @@ def main() -> None:
 
     if not args.skip_correctness:
         run_correctness_suite(device)
-        print(
-            "\nAll correctness tests passed."
-        )
+        print("\nAll correctness tests passed.")
 
     if not args.skip_benchmark:
         for case in benchmark_cases():

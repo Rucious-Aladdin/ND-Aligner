@@ -7,7 +7,7 @@ import torch
 import torch.nn.functional as F
 
 from tts.models.modules.coupling_decoder import CouplingDecoder, CouplingDecoderOutput
-from tts.models.modules.crf_aligner import LinearCRFAligner
+from tts.models.modules.crf_aligner import LinearCRFAligner, validate_decoding_strategy
 from tts.models.modules.decoder import Decoder
 from tts.models.modules.spec_encoder import SpecEncoder
 from tts.models.modules.text_encoder import TextEncoder
@@ -84,6 +84,7 @@ def init_nd_aligner(
         use_delta_delta_feat=config.use_delta_delta_feat,
         use_optional_skip_sep=config.use_optional_skip_sep,
         separator_token_id=config.separator_token_id,
+        viterbi_ste_training=config.viterbi_ste_training,
     )
 
 
@@ -314,6 +315,7 @@ class NDAligner(BaseModel):
         use_delta_delta_feat: bool = False,
         use_optional_skip_sep: bool = False,
         separator_token_id: int = -1,
+        viterbi_ste_training: bool = False,
     ):
         super().__init__()
 
@@ -337,6 +339,9 @@ class NDAligner(BaseModel):
                 + f"set use_optional_skip_sep=False or"
                 + f"set proper seperator_token_id at initialization."
             )
+
+        self.viterbi_ste_training = viterbi_ste_training
+        self.decoding_strategy = "viterbi"
 
     @override
     def forward(
@@ -373,6 +378,9 @@ class NDAligner(BaseModel):
         idx = torch.arange(T_spec, device=y.device).unsqueeze(0)
         spec_mask = (idx < y_lengths.unsqueeze(1)).to(dtype=y.dtype)
 
+        # Viterbi STE needs both the soft posterior and the hard Viterbi path.
+        # Keep the caller-facing compute_hard_path option, but force hard-path
+        # extraction whenever STE training is enabled.
         out = self.compute_alignments(
             x=x,
             x_lengths=x_lengths,
@@ -380,11 +388,25 @@ class NDAligner(BaseModel):
             y_lengths=y_lengths,
             cond=cond,
             compute_soft_path=True,
-            compute_hard_path=compute_hard_path,
+            compute_hard_path=(compute_hard_path or self.viterbi_ste_training),
         )
 
+        if self.viterbi_ste_training:
+            assert out.hard_attn is not None
+
+            # Straight-through estimator:
+            #   forward : hard Viterbi alignment
+            #   backward: identity gradient w.r.t. the soft posterior alignment
+            #
+            # Numerically, ste_attn == hard_attn in the forward pass, while
+            # d(ste_attn)/d(soft_attn) = 1.
+            ste_attn = out.soft_attn + (out.hard_attn - out.soft_attn).detach()
+            recon_attn = ste_attn
+        else:
+            recon_attn = out.soft_attn
+
         aligned_h = torch.bmm(
-            out.soft_attn,
+            recon_attn,
             out.h_text.transpose(1, 2),
         )  # (B, T_spec, C_text)
 
@@ -513,12 +535,17 @@ class NDAligner(BaseModel):
                 forward-backward only
 
             compute_soft_path=True, compute_hard_path=True:
-                forward-backward + Viterbi
+                forward-backward + selected hard decoder
 
             compute_soft_path=False, compute_hard_path=True:
-                Viterbi only
+                hard decoding only (posterior strategies run forward-backward internally)
 
         At least one of compute_soft_path and compute_hard_path must be True.
+
+
+        Note:
+            "posterior_viterbi" and "mea" require forward-backward posterior
+            computation internally, even when compute_soft_path=False.
         """
 
         if (not compute_soft_path) and (not compute_hard_path):
@@ -586,6 +613,7 @@ class NDAligner(BaseModel):
                 opt_sep_mask=opt_sep_mask,
                 return_soft=compute_soft_path,
                 return_hard=True,
+                decoding_strategy=self.decoding_strategy,
             )
 
             (
@@ -615,6 +643,7 @@ class NDAligner(BaseModel):
                 opt_sep_mask=opt_sep_mask,
                 return_soft=True,
                 return_hard=False,
+                decoding_strategy=self.decoding_strategy,
             )
 
             (
@@ -659,25 +688,15 @@ class NDAligner(BaseModel):
             viterbi_logp=viterbi_logp,
         )
 
-    @torch.inference_mode()
-    def reconstruct(
-        self,
-        aligned_h: torch.Tensor,
-        cond: torch.Tensor,
-        spec_mask: torch.Tensor | None = None,
-    ) -> torch.Tensor:
+    def set_decoding_strategy(self, strategy: str):
         """
-        Returns:
-            mel: (B, T, n_mels)
+        strategy:
+            "viterbi": standard Viterbi decoding from CRF node potentials.
+            "posterior_viterbi": Viterbi-style decoding from log posterior marginals.
+            "mea": maximum-expected-accuracy decoding from posterior marginals.
         """
-        if self.spec_decoder is None:
-            raise RuntimeError("spec_decoder is not initialized.")
-
-        return self.spec_decoder.inference(
-            x=aligned_h,
-            cond=cond,
-            mask=spec_mask,
-        )
+        validate_decoding_strategy(strategy)
+        self.decoding_strategy = strategy
 
     def _make_opt_sep_mask(
         self,
@@ -772,6 +791,7 @@ class NDAligner(BaseModel):
         compute_phone_grid: bool = False,
         compute_word_grid: bool = False,
         include_space_token_to_grid: bool = True,
+        decoding_strategy: str = "viterbi",
     ) -> AlignerInference:
         assert self.spec_encoder is not None
         assert self.crf_aligner is not None

@@ -43,8 +43,8 @@ HOP_LENGTH = 160
 # ==================================
 
 
-DATASETS = ["vctk", "libritts"]
-# DATASETS = ["vctk"]
+# DATASETS = ["vctk", "libritts"]
+DATASETS = ["vctk"]
 
 SEED = 42
 
