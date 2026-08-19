@@ -15,6 +15,7 @@ from tts.data.quantile_bucket_sampler import QuantileDurationBatchSampler
 from tts.logger.timit_logger import NDAlignerTimitLogger
 from tts.logger.utils.plot_alignment import plot_alignment
 from tts.logger.utils.plot_spectrogram import plot_spectrogram
+from tts.models.modules.coupling_decoder_conv2d import CouplingConv2dDecoderOutput
 from tts.models.ndaligner import (
     AlignerForward,
     NDAlignerLossWeights,
@@ -472,6 +473,26 @@ class NDAlignerTrainer(
                     plot_spectrogram(mel_i[0, :recon_len].detach().transpose(0, 1)),
                     step,
                 )
+
+            if hasattr(out.coupling_dec_out, "out_norms"):
+
+                coupling_dec_out = cast(CouplingConv2dDecoderOutput, out.coupling_dec_out)
+                for i, out_norm_i in enumerate(coupling_dec_out.out_norms):
+                    # [B, T, N] -> [T, N]
+                    out_norm_2d = out_norm_i[
+                        0,
+                        :recon_len,
+                        :t_len,
+                    ].detach()
+
+                    self.logger.log_figure(
+                        f"{prefix}/Output_Norm_st_{i}",
+                        plot_alignment(
+                            out_norm_2d,
+                            tokens=tokens,
+                        ),
+                        step,
+                    )
 
         if self.data_config.audio.feature_type != "mel":
             self.logger.log_figure(

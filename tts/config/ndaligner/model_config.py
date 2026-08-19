@@ -16,7 +16,7 @@ SPEC_DIM = 128
 TEXT_DIM = 128
 
 SHARED_HIDDEN_DIM = 192
-DEC_HIDDEN_DIM = 192
+DEC_HIDDEN_DIM = 128
 
 USE_DELTA_FEAT = False
 USE_DELTA_DELTA_FEAT = False
@@ -62,7 +62,7 @@ class SpecEncoderConfigs:
 
 @dataclass(frozen=True)
 class SpecDecoderConfigs:
-    decoder_type: str = "coupling"  # conv1d, "coupling"
+    decoder_type: str = "coupling_conv2d"  # conv1d, "coupling" "coupling_conv2d"
 
     in_channels: int = TEXT_DIM
     out_channels: int = N_MELS
@@ -78,6 +78,13 @@ class SpecDecoderConfigs:
     coupling_loss_decay_factor: float = 1.0
     coupling_kernel_size: int = 3
     coupling_normalize_loss_weights: bool = True
+
+    coupling_conv2d_cond_proj_dim: int = 32
+    coupling_conv2d_num_refine_steps: int = 3
+    coupling_conv2d_step_emb_dim: int = 32
+    coupling_conv2d_loss_decay_factor: float = 1.0
+    coupling_conv2d_kernel_size: int = 5
+    coupling_conv2d_normalize_loss_weights: bool = True
 
 
 @dataclass(frozen=True)

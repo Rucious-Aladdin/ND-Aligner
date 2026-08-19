@@ -185,9 +185,9 @@ class TrainConfigs:
 
     # --- Hardware & Dataloader ---
     seed: int = 1234
-    batch_size: int = 8
+    batch_size: int = 4
     val_batch_size: int = 8
-    grad_accumulation_steps: int = 1
+    grad_accumulation_steps: int = 2
     num_workers: int = 8
     fp16_run: bool = False
     drop_last: bool = True

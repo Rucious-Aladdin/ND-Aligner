@@ -7,6 +7,10 @@ import torch
 import torch.nn.functional as F
 
 from tts.models.modules.coupling_decoder import CouplingDecoder, CouplingDecoderOutput
+from tts.models.modules.coupling_decoder_conv2d import (
+    CouplingConv2dDecoder,
+    CouplingConv2dDecoderOutput,
+)
 from tts.models.modules.crf_aligner import LinearCRFAligner, validate_decoding_strategy
 from tts.models.modules.decoder import Decoder
 from tts.models.modules.spec_encoder import SpecEncoder
@@ -57,6 +61,21 @@ def init_nd_aligner(
             step_emb_dim=dec_cfg.coupling_step_emb_dim,
             loss_decay_factor=dec_cfg.coupling_loss_decay_factor,
             normalize_loss_weights=dec_cfg.coupling_normalize_loss_weights,
+        ).to(device)
+    elif config.spec_dec.decoder_type == "coupling_conv2d":
+        spec_decoder = CouplingConv2dDecoder(
+            in_channels=dec_cfg.in_channels,
+            out_channels=dec_cfg.out_channels,
+            hidden_channels=dec_cfg.hidden_channels,
+            cond_dim=dec_cfg.cond_dim,
+            cond_proj_dim=dec_cfg.coupling_conv2d_cond_proj_dim,
+            kernel_size=dec_cfg.coupling_conv2d_kernel_size,
+            num_refinement_steps=dec_cfg.coupling_conv2d_num_refine_steps,
+            dilation=dec_cfg.dilation_base,
+            dropout=dec_cfg.dropout,
+            step_emb_dim=dec_cfg.coupling_conv2d_step_emb_dim,
+            loss_decay_factor=dec_cfg.coupling_conv2d_loss_decay_factor,
+            normalize_loss_weights=dec_cfg.coupling_conv2d_normalize_loss_weights,
         ).to(device)
 
     # for inference
@@ -140,7 +159,7 @@ class AlignerForward(NamedTuple):
     recon_loss: torch.Tensor
 
     # Optional
-    coupling_dec_out: CouplingDecoderOutput | None
+    coupling_dec_out: CouplingDecoderOutput | CouplingConv2dDecoderOutput | None
 
 
 class AlignerFeatures(NamedTuple):
@@ -309,7 +328,7 @@ class NDAligner(BaseModel):
         text_encoder: TextEncoder,
         spec_encoder: SpecEncoder,
         crf_aligner: LinearCRFAligner,
-        spec_decoder: Decoder | CouplingDecoder | None = None,
+        spec_decoder: Decoder | CouplingDecoder | CouplingConv2dDecoder | None = None,
         input_maker: AlignerInputMaker | None = None,
         use_delta_feat: bool = False,
         use_delta_delta_feat: bool = False,
@@ -431,6 +450,19 @@ class NDAligner(BaseModel):
                 cond=cond,
                 mask=valid_spec_mask,
                 target=y_recon_bt,
+            )
+
+            recon = dec_out.mel_hat
+            recon_loss = dec_out.loss
+            coupling_dec_out = dec_out
+        elif isinstance(self.spec_decoder, CouplingConv2dDecoder):
+            dec_out = self.spec_decoder.forward(
+                h_text=out.h_text,
+                gamma=recon_attn,
+                target=y_recon,
+                cond=cond,
+                spec_lengths=y_lengths,
+                text_lengths=x_lengths,
             )
 
             recon = dec_out.mel_hat
