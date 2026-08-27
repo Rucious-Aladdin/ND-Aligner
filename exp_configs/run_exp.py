@@ -49,7 +49,7 @@ def run_one_experiment(exp_dir: Path) -> None:
     """
     Call tts.train.train_nd_aligner.main() with temporary argv.
     """
-    from tts.train.train_nd_aligner import main as train_main
+    from nd_aligner.train.train_nd_aligner import main as train_main
 
     data_config = exp_dir / "data_config.json"
     model_config = exp_dir / "model_config.json"
