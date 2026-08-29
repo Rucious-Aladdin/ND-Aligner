@@ -1,7 +1,5 @@
 # NDAligner
 
-# Requirements
-
 ## Pre-requisites
 
 1. Python 3.14
