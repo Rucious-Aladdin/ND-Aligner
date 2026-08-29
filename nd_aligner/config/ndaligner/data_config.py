@@ -134,7 +134,7 @@ class ExperimentConfigs:
     exp_variant: str = "vctk+libritts+full+sr16k+hop10ms+win25ms"
 
     timit_val_root_dir: str = "/shared/data_zfs/blue2959/TIMIT_val_250/TRAIN"
-    timit_confirm_roor_dir: str = "/shared/data_zfs/blue2959/TIMIT_confirm_1000/TRAIN"
+    timit_confirm_root_dir: str = "/shared/data_zfs/blue2959/TIMIT_confirm_1000/TRAIN"
     timit_test_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TEST"
     timit_sr: int = 16_000
 

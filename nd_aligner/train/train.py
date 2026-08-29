@@ -448,7 +448,7 @@ class NDAlignerTrainer(
 
             # Confirmation Dataset
             timit_test_benchmarker = TIMITBenchMarker(
-                root_dir=self.data_config.extra_exp.timit_confirm_roor_dir,
+                root_dir=self.data_config.extra_exp.timit_confirm_root_dir,
                 ref_audio_sr=self.data_config.extra_exp.timit_sr,
                 hyp_audio_sr=self.data_config.audio.sr,
                 hyp_hop_length=self.data_config.audio.hop_length,

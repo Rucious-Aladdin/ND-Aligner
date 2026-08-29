@@ -57,7 +57,7 @@ line-length = 100
 target-version = ["py314"]
 
 [tool.pyright]
-include = ["nd_aligner"]
+include = ["nd_aligner", "exp_configs", "scripts", "demo", "figures"]
 pythonVersion = "3.14"
 pythonPlatform = "Linux"
 deprecateTypingAliases = true
