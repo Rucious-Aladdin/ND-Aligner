@@ -49,7 +49,7 @@ def cache_dir_name() -> str:
     )
 
 
-def dataset_postfix(x) -> str:
+def dataset_postfix(x: str) -> str:
     if SAMPLE_RATE == 16_000:
         return f"{x}-16k"
     elif SAMPLE_RATE == 22_050:

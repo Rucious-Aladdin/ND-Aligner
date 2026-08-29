@@ -576,7 +576,11 @@ if __name__ == "__main__":
     tqdm.write(f"Mean coverage ratio: {mean_coverage:.6f}")
 
     # 🌟 랜덤 출력 헬퍼 함수
-    def print_examples(examples, title, max_samples=5):
+    def print_examples(
+        examples: list[tuple[Path, list[tuple[list[str], str]]]],
+        title: str,
+        max_samples: int = 5,
+    ) -> None:
         if not examples:
             tqdm.write(f"\n[Info] No examples found for: {title}")
             return

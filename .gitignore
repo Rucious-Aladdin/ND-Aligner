@@ -13,3 +13,13 @@ results/
 __pycache__/
 *.py[cod]
 *$py.class
+
+# VSCode
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+
+# Machine-specific files
+/.clangd
+*.so

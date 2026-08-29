@@ -13,10 +13,10 @@ def get_linear_anneal_weight(
     """
     if current_step <= start_step:
         return initial_weight
-    
+
     if current_step >= end_step:
         return final_weight
-    
+
     # Linear interpolation
     progress = (current_step - start_step) / (end_step - start_step)
     weight = initial_weight + progress * (final_weight - initial_weight)

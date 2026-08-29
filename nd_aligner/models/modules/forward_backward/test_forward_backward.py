@@ -205,7 +205,7 @@ def run_cuda(
         log_beta:
             Shape: (B, T_speech, T_text)
     """
-    return MonotoneForwardBackwardCUDA.apply(  # type: ignore
+    return MonotoneForwardBackwardCUDA.apply(
         log_b,
         mask,
         opt_sep_mask,

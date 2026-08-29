@@ -1,0 +1,10 @@
+{
+  "recommendations": [
+    "esbenp.prettier-vscode",
+    "llvm-vs-code-extensions.vscode-clangd",
+    "mkhl.shfmt",
+    "ms-python.black-formatter",
+    "ms-python.vscode-pylance",
+    "tamasfe.even-better-toml"
+  ]
+}

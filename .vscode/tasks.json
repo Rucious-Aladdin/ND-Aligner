@@ -1,0 +1,61 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "check: pyright",
+      "type": "shell",
+      "command": "uv run pyright",
+      "group": "test",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "check: black & isort",
+      "type": "shell",
+      "command": "uv run isort --check-only --diff . && uv run black --check --diff .",
+      "group": "test",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "fix: black & isort",
+      "type": "shell",
+      "command": "uv run isort . && uv run black .",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "fix: prettier",
+      "type": "shell",
+      "command": "bunx prettier --write \"**/*.{md,json,jsonc,yaml,yml}\"",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "fix: toml",
+      "type": "shell",
+      "command": "taplo fmt -o column_width=100 pyproject.toml",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "fix: shellscript",
+      "type": "shell",
+      "command": "shfmt -i 2 -ln bash -w scripts/",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    },
+    {
+      "label": "fix: c/cpp/cuda",
+      "type": "shell",
+      "command": "find nd_aligner \\( -name '*.c' -o -name '*.cu' -o -name '*.cpp' \\) -print0 | xargs -0 clang-format -i",
+      "group": "build",
+      "presentation": { "panel": "dedicated", "clear": true },
+      "problemMatcher": []
+    }
+  ]
+}

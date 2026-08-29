@@ -6,7 +6,7 @@ import math
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import NamedTuple, override
+from typing import TYPE_CHECKING, NamedTuple, override
 
 import torch
 from tqdm import tqdm
@@ -21,6 +21,9 @@ from nd_aligner.models.utils.lev_words_mapper import (
 )
 
 from ..utils.entropy import compute_framewise_entropy
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 
 class TIMITMetrics(NamedTuple):
@@ -727,7 +730,7 @@ class TIMITBenchMarker:
 
     @staticmethod
     def _plot_alignment_matrix(
-        ax,
+        ax: Axes,
         mat: torch.Tensor,
         y_labels: list[str],
         title: str,
