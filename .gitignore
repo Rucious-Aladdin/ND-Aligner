@@ -9,6 +9,9 @@ exp_configs/**/*.json
 output/
 results/
 
+# Build
+nd_aligner/models/modules/forward_backward/build
+
 # Python cache
 __pycache__/
 *.py[cod]

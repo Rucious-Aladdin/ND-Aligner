@@ -33,6 +33,7 @@ export TORCH_CUDA_ARCH_LIST
 echo "TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST"
 
 # Build the extension
+rm -rf nd_aligner/models/modules/forward_backward/build
 uv run python - <<EOF
 import torch
 from torch.utils.cpp_extension import CUDA_HOME

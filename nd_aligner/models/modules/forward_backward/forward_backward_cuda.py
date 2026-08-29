@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib.util
 from pathlib import Path
 from typing import Any, cast, override
 
@@ -12,6 +13,9 @@ from torch.utils.cpp_extension import load
 # ============================================================
 
 _THIS_DIR = Path(__file__).resolve().parent
+_EXT_NAME = "monotone_crf_forward_backward_ext"
+_SOURCES = [_THIS_DIR / "forward_backward.cpp", _THIS_DIR / "log_alpha_beta.cu"]
+_BUILD_DIR = _THIS_DIR / "build"
 
 _ext = None
 
@@ -22,12 +26,24 @@ def _load_ext():
     if _ext is not None:
         return _ext
 
+    library_path = _BUILD_DIR / f"{_EXT_NAME}.so"
+
+    if library_path.exists() and library_path.stat().st_mtime >= max(
+        source.stat().st_mtime for source in _SOURCES
+    ):
+        spec = importlib.util.spec_from_file_location(_EXT_NAME, library_path)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        _ext = module
+        return _ext
+
+    _BUILD_DIR.mkdir(exist_ok=True)
+
     _ext = load(
-        name="monotone_crf_forward_backward_ext",
-        sources=[
-            str(_THIS_DIR / "forward_backward.cpp"),
-            str(_THIS_DIR / "log_alpha_beta.cu"),
-        ],
+        name=_EXT_NAME,
+        sources=[str(source) for source in _SOURCES],
+        build_directory=str(_BUILD_DIR),
         extra_cflags=[
             "-O3",
         ],
