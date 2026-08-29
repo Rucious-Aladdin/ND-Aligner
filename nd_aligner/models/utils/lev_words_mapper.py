@@ -71,10 +71,12 @@ class LevensteinWordsMapper:
         tokenizer: BaseTokenizer,
         hyp_ignore_symbols: set[str] | None = None,
         max_ref_words_per_hyp_word: int = 5,
+        span_only_symbols: set[str] | None = None,
     ) -> None:
         self.tokenizer = tokenizer
         self.hyp_ignore_symbols = set(hyp_ignore_symbols or set())
         self.max_ref_words_per_hyp_word = max_ref_words_per_hyp_word
+        self.span_only_symbols = set(span_only_symbols or set())
 
     def __call__(
         self,
@@ -145,6 +147,12 @@ class LevensteinWordsMapper:
         for idx, symbol in enumerate(hyp_symbols):
             if symbol == " ":
                 flush()
+                continue
+
+            if symbol in self.span_only_symbols:
+                if start is None:
+                    start = idx
+                stop = idx + 1
                 continue
 
             if symbol in self.hyp_ignore_symbols:
