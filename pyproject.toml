@@ -25,6 +25,7 @@ dependencies = [
   "praatio~=6.2",
   "resemblyzer~=0.1.4",
   "scipy~=1.18",
+  "setuptools~=84.0",
   "silero-vad~=6.2",
   "soundfile~=0.14.0",
   "tensorboard~=2.21",
