@@ -11,7 +11,7 @@ INPUT_FEATURE_TYPE = "mel"
 
 DATA_PARENT_DIR = "/shared/data_zfs/blue2959"
 TOKENIZER_TYPE: str = "espeak"  # "arpa"
-ARPA_TOKENIZER_LEXION_PATH = "./tts/baseline/FastSpeech2/lexicon/vctk-lexicon.txt"
+ARPA_TOKENIZER_LEXION_PATH = "./nd_aligner/baseline/FastSpeech2/lexicon/vctk-lexicon.txt"
 
 N_MELS = 80
 N_FFT = 1024
@@ -26,9 +26,9 @@ HOP_LENGTH = 160
 
 # ==================================
 
-
-DATASETS = ["vctk", "libritts"]
 # DATASETS = ["vctk"]
+# DATASETS = ["vctk", "libritts"]
+DATASETS = ["vctk", "librispeech"]
 
 
 def cache_dir_name() -> str:
@@ -109,12 +109,26 @@ class DatasetConfigs:
         default_factory=lambda: ["train-clean-100", "train-clean-360"]
     )  # train-clean-360
 
+    librispeech_root: str = os.path.join(
+        DATA_PARENT_DIR,
+        dataset_postfix(
+            "LibriSpeech-preprocessed-trimmed",
+        ),
+    )
+    librispeech_subsets: list[str] = field(
+        default_factory=lambda: [
+            "train-clean-100",
+            "train-clean-360",
+            "train-other-500",
+        ]
+    )  # train-clean-360
+
     data_cache_dir: str = field(
         default_factory=lambda: os.path.join(DATA_PARENT_DIR, cache_dir_name())
     )
 
     seed: int = 42
-    val_ratio: float = 0.01
+    val_ratio: float = 0.001
     num_buckets: int = 10
 
     min_duration_sec: float = 1.5
@@ -129,9 +143,9 @@ class ExperimentConfigs:
     train_time_eval_logging: bool = True
     train_time_eval_per_step: int = 1000
 
-    base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.0/main"
-    exp_name: str = "vctk+libritts+full+sr16k+hop10ms+win25ms"
-    exp_variant: str = "vctk+libritts+full+sr16k+hop10ms+win25ms"
+    base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.2/main"
+    exp_name: str = "vctk+librispeech"
+    exp_variant: str = "vctk+librispeech"
 
     timit_val_root_dir: str = "/shared/data_zfs/blue2959/TIMIT_val_250/TRAIN"
     timit_confirm_roor_dir: str = "/shared/data_zfs/blue2959/TIMIT_confirm_1000/TRAIN"
@@ -142,7 +156,7 @@ class ExperimentConfigs:
 @dataclass(frozen=True)
 class TrainConfigs:
     # --- Logging & Checkpointing ---
-    log_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.2/runs"
+    log_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.2/runs/main"
     run_name: str = "nd_aligner_vctk+libritts_test"
 
     continue_path: str = ""

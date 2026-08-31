@@ -20,4 +20,3 @@ def plot_spectrogram(spectrogram: torch.Tensor) -> Figure:
     plt.colorbar(im, ax=ax)
     fig.tight_layout()
     return fig
-    return fig

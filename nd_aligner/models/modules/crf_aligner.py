@@ -1,6 +1,5 @@
 import ctypes
 import logging
-from pathlib import Path
 from typing import override
 
 import torch
@@ -8,6 +7,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from .forward_backward.forward_backward_cuda import MonotoneForwardBackwardCUDA
+from .mas.viterbi_dp_lib import load_mas_lib
 
 
 def valid_group_count(channels: int, max_groups: int = 8) -> int:
@@ -266,8 +266,6 @@ class NodePotentialPredictor(nn.Module):
         return unary_potential
 
 
-_VITERBI_LIBRARY: ctypes.CDLL | None = None
-_VITERBI_LIBRARY_ERROR: Exception | None = None
 _VITERBI_FALLBACK_LOGGED = False
 logger = logging.getLogger(__name__)
 
@@ -279,60 +277,12 @@ DECODING_STRATEGIES = {
 }
 
 
-def validate_decoding_strategy(decoding_strategy: str) -> None:
+def _validate_decoding_strategy(decoding_strategy: str) -> None:
     if decoding_strategy not in DECODING_STRATEGIES:
         raise ValueError(
             f"Unknown decoding_strategy={decoding_strategy!r}. "
             + f"Expected one of {sorted(DECODING_STRATEGIES)}."
         )
-
-
-def _load_viterbi_library() -> ctypes.CDLL:
-    """
-    Load and configure the local C Viterbi shared library once.
-
-    RUN THIS:
-        $ gcc -O3 -march=native -fPIC -shared viterbi_dp.c -o viterbi_dp.so
-
-    """
-    global _VITERBI_LIBRARY
-    global _VITERBI_LIBRARY_ERROR
-
-    if _VITERBI_LIBRARY is not None:
-        return _VITERBI_LIBRARY
-
-    if _VITERBI_LIBRARY_ERROR is not None:
-        raise RuntimeError(
-            "The C Viterbi library previously failed to load."
-        ) from _VITERBI_LIBRARY_ERROR
-
-    library_path = Path(__file__).resolve().parent / "mas" / "viterbi_dp.so"
-
-    try:
-        library = ctypes.CDLL(str(library_path))
-        function = library.viterbi_forward_backtrack_f32
-
-        function.argtypes = [
-            ctypes.c_void_p,  # log_b: float32 [B, T_speech, T_text]
-            ctypes.c_void_p,  # dp_valid: uint8 [B, T_speech, T_text]
-            ctypes.c_void_p,  # initial_delta: float32 [B, T_text]
-            ctypes.c_void_p,  # spec_lengths: int64 [B]
-            ctypes.c_void_p,  # text_lengths: int64 [B]
-            ctypes.c_void_p,  # opt_sep_mask: uint8 [B, T_text] or NULL
-            ctypes.c_int64,
-            ctypes.c_int64,
-            ctypes.c_int64,
-            ctypes.c_float,
-            ctypes.c_void_p,  # path: int64 [B, T_speech]
-            ctypes.c_void_p,  # viterbi_logp: float32 [B]
-        ]
-        function.restype = ctypes.c_int
-    except Exception as exc:
-        _VITERBI_LIBRARY_ERROR = exc  # type: ignore
-        raise RuntimeError(f"Failed to load C Viterbi library: {library_path}") from exc
-
-    _VITERBI_LIBRARY = library  # type: ignore
-    return library
 
 
 class LinearCRFAligner(nn.Module):
@@ -397,11 +347,15 @@ class LinearCRFAligner(nn.Module):
             conv_kernel_size=conv_kernel_size,
         )
 
+        # Viterbi C extension
         try:
-            self.viterbi_lib = _load_viterbi_library()
+            self.viterbi_lib = load_mas_lib()
         except:
             print("[WARNING] load-viterbi lib failed.")
             self.viterbi_lib = None
+
+        # forward-backward cuda extensions
+        self._fb_cuda_available = True
 
     @override
     def forward(
@@ -419,7 +373,7 @@ class LinearCRFAligner(nn.Module):
         if (not return_soft) and (not return_hard):
             raise RuntimeError("At least one of return_soft and return_hard must be True.")
 
-        validate_decoding_strategy(decoding_strategy)
+        _validate_decoding_strategy(decoding_strategy)
 
         if spec_mask.dim() == 3:
             spec_mask = spec_mask.squeeze(1)
@@ -634,14 +588,22 @@ class LinearCRFAligner(nn.Module):
             log_z:
                 Shape: (B,)
         """
-        if log_phi.is_cuda:
-            return self.__forward_backward_cuda(
-                log_phi=log_phi,
-                mask=mask,
-                spec_lengths=spec_lengths,
-                text_lengths=text_lengths,
-                opt_sep_mask=opt_sep_mask,
-            )
+        if log_phi.is_cuda and self._fb_cuda_available:
+            try:
+                return self.__forward_backward_cuda(
+                    log_phi=log_phi,
+                    mask=mask,
+                    spec_lengths=spec_lengths,
+                    text_lengths=text_lengths,
+                    opt_sep_mask=opt_sep_mask,
+                )
+            except Exception:
+                self._fb_cuda_available = False
+                logger.exception(
+                    "CUDA forward-backward failed; falling back to the PyTorch "
+                    + "implementation for the rest of this process. Training will "
+                    + "be substantially slower.",
+                )
 
         return self.__forward_backward_python(
             log_phi=log_phi,
@@ -1026,7 +988,7 @@ class LinearCRFAligner(nn.Module):
         B, T_speech, T_text = log_b.shape
         device = log_b.device
 
-        library = _load_viterbi_library()
+        library = load_mas_lib()
         function = library.viterbi_forward_backtrack_f32
 
         # The C ABI is fixed to float32, uint8, and int64.

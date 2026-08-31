@@ -7,11 +7,12 @@ import torch
 import torch.nn.functional as F
 
 from nd_aligner.models.modules.coupling_decoder import CouplingDecoder, CouplingDecoderOutput
-from nd_aligner.models.modules.crf_aligner import LinearCRFAligner, validate_decoding_strategy
+from nd_aligner.models.modules.crf_aligner import LinearCRFAligner, _validate_decoding_strategy
 from nd_aligner.models.modules.decoder import Decoder
 from nd_aligner.models.modules.spec_encoder import SpecEncoder
 from nd_aligner.models.modules.text_encoder import TextEncoder
 from nd_aligner.models.modules.utils.sequence_mask import sequence_mask
+from nd_aligner.models.utils.diagonal_loss import compute_beta_binomial_loss
 from nd_aligner.models.utils.input_maker import AlignerInputMaker
 
 from ..config.ndaligner.model_config import NDAlignerConfigs
@@ -190,120 +191,49 @@ class AlignerInference(NamedTuple):
     word_grid: list[list[tuple[float, float, str]]] | None  # (start_sec, end_sec, word)
 
 
-def compute_beta_binomial_loss(
-    gamma_posterior: torch.Tensor,  # (B, T_s, T_t)
-    y_lengths: torch.Tensor,  # (B,)
-    x_lengths: torch.Tensor,  # (B,)
-    *,
-    omega: float = 1.0,
-    eps: float = 1e-8,
-) -> torch.Tensor:
-    """
-    Beta-binomial diagonal prior loss for monotonic alignment.
+_WORD_STRIP_CHARS = ' \t\n\r;:,.!?¡¿—…"«»“”()[]{}'
 
-    Computes:
 
-        L = -(1 / sum_b y_lengths[b]) sum_{b,t,j}
-                gamma[b,t,j] * log prior_bb[b,t,j]
+def _normalize_word(word: str) -> str:
+    """Strip surrounding punctuation while keeping internal apostrophes."""
+    return word.strip().strip(_WORD_STRIP_CHARS)
 
-    where:
 
-        prior_bb[t, j]
-            = BetaBinomial(
-                j; n=x_lengths[b]-1,
-                alpha=omega * (t + 1),
-                beta =omega * (T - t)
-              )
+# eSpeak character-level IPA emits stress marks as separate tokens; they carry
+# no duration of their own and are merged into the following symbol.
+_ESPEAK_MERGE_LEFT_SYMBOLS = frozenset({"ˈ", "ˌ"})
 
-    Args:
-        gamma_posterior:
-            Soft alignment posterior, (B, T_s, T_t).
+# Punctuation tokens occupy frames but do not correspond to a phone; they are
+# kept as silence intervals so that the grid stays contiguous.
+_ESPEAK_SILENT_SYMBOLS = frozenset(",.;:!?—…")
 
-        y_lengths:
-            Valid speech/mel lengths, (B,).
 
-        x_lengths:
-            Valid text/token lengths, (B,).
+def _grid_ignored_symbols(tokenizer_type: str) -> frozenset[str]:
+    if tokenizer_type == "espeak":
+        return _ESPEAK_MERGE_LEFT_SYMBOLS
+    return frozenset()
 
-        omega:
-            Beta-binomial concentration scale.
-            Lower omega => wider prior.
-            Higher omega => sharper diagonal prior.
 
-        eps:
-            Numerical epsilon.
+def _grid_silent_symbols(tokenizer_type: str) -> frozenset[str]:
+    if tokenizer_type == "espeak":
+        return _ESPEAK_SILENT_SYMBOLS
+    return frozenset()
 
-        detach_gamma:
-            If True, the loss does not backprop through gamma_posterior.
 
-    Returns:
-        Scalar loss.
-    """
-    if gamma_posterior.dim() != 3:
-        raise ValueError(
-            f"gamma_posterior must have shape (B, T_s, T_t), "
-            + f"got {tuple(gamma_posterior.shape)}."
-        )
+def _merge_adjacent_silence(
+    intervals: list[tuple[float, float, str]],
+    silence_label: str,
+) -> list[tuple[float, float, str]]:
+    """Collapse consecutive silence intervals into a single interval."""
+    merged: list[tuple[float, float, str]] = []
 
-    B, T_s, T_t = gamma_posterior.shape
-    device = gamma_posterior.device
-    dtype = gamma_posterior.dtype
+    for start, end, label in intervals:
+        if merged and label == silence_label and merged[-1][2] == silence_label:
+            merged[-1] = (merged[-1][0], end, silence_label)
+        else:
+            merged.append((start, end, label))
 
-    y_lengths = y_lengths.to(device=device).long()
-    x_lengths = x_lengths.to(device=device).long()
-
-    if torch.any(y_lengths <= 0):
-        raise ValueError("All y_lengths must be positive.")
-    if torch.any(x_lengths <= 0):
-        raise ValueError("All x_lengths must be positive.")
-    if omega <= 0:
-        raise ValueError(f"omega must be positive, got {omega}.")
-
-    gamma = gamma_posterior
-
-    t = torch.arange(T_s, device=device, dtype=dtype).view(1, T_s, 1)
-    j = torch.arange(T_t, device=device, dtype=dtype).view(1, 1, T_t)
-
-    T = y_lengths.to(dtype=dtype).view(B, 1, 1)
-    N = x_lengths.to(dtype=dtype).view(B, 1, 1)
-
-    t_idx = torch.arange(T_s, device=device).view(1, T_s, 1)
-    j_idx = torch.arange(T_t, device=device).view(1, 1, T_t)
-
-    valid = (t_idx < y_lengths.view(B, 1, 1)) & (j_idx < x_lengths.view(B, 1, 1))
-    t1 = torch.minimum(t + 1.0, T)
-
-    alpha = omega * t1
-    beta = omega * (T - t1 + 1.0)
-
-    alpha = alpha.clamp_min(eps)
-    beta = beta.clamp_min(eps)
-
-    n = (N - 1.0).clamp_min(0.0)
-    j_eff = torch.minimum(j, n)
-
-    log_comb = torch.lgamma(n + 1.0) - torch.lgamma(j_eff + 1.0) - torch.lgamma(n - j_eff + 1.0)
-
-    log_beta_num = (
-        torch.lgamma(j_eff + alpha)
-        + torch.lgamma(n - j_eff + beta)
-        - torch.lgamma(n + alpha + beta)
-    )
-    log_beta_den = torch.lgamma(alpha) + torch.lgamma(beta) - torch.lgamma(alpha + beta)
-    log_prior = log_comb + log_beta_num - log_beta_den  # (B, T_s, T_t)
-    neg_large = -1e4 if dtype in (torch.float16, torch.bfloat16) else -1e9
-
-    log_prior = log_prior.masked_fill(~valid, neg_large)
-    log_prior = log_prior - torch.logsumexp(log_prior, dim=-1, keepdim=True)
-    log_prior = log_prior.masked_fill(~valid, neg_large)
-
-    gamma = gamma.masked_fill(~valid, 0.0)
-    loss_per_frame = -(gamma * log_prior).sum(dim=-1)  # (B, T_s)
-
-    valid_frame = t_idx.squeeze(-1) < y_lengths.view(B, 1)
-    loss_per_frame = loss_per_frame.masked_fill(~valid_frame, 0.0)
-    denom = y_lengths.to(dtype=dtype).sum().clamp_min(1.0)
-    return loss_per_frame.sum() / denom
+    return merged
 
 
 class NDAligner(BaseModel):
@@ -698,7 +628,7 @@ class NDAligner(BaseModel):
             "posterior_viterbi": Viterbi-style decoding from log posterior marginals.
             "mea": maximum-expected-accuracy decoding from posterior marginals.
         """
-        validate_decoding_strategy(strategy)
+        _validate_decoding_strategy(strategy)
         self.decoding_strategy = strategy
 
     def _make_opt_sep_mask(
@@ -966,7 +896,7 @@ class NDAligner(BaseModel):
 
             phone_symbols_per_sample.append(symbols)
             phone_strings.append(tokenizer.to_token_string(text))
-            word_strings.append(" ".join(text.split()))
+            word_strings.append(" ".join(_normalize_word(w) for w in text.split()))
 
         sec_per_frame = hop_length / model_sr
 
@@ -974,14 +904,16 @@ class NDAligner(BaseModel):
         # 6. Optional phoneme grid.
         # ------------------------------------------------------------
         phoneme_grid: list[list[tuple[float, float, str]]] | None = None
-
         if compute_phone_grid:
             phoneme_grid = []
+            merge_symbols = _grid_ignored_symbols(self.input_maker.tokenizer_type)
+            silent_symbols = _grid_silent_symbols(self.input_maker.tokenizer_type)
 
             for batch_idx, symbols in enumerate(phone_symbols_per_sample):
                 text_length = int(batch.x_lengths[batch_idx].item())
 
                 current_frame = 0
+                pending_start: int | None = None
                 sample_grid: list[tuple[float, float, str]] = []
 
                 for token_idx in range(text_length):
@@ -990,19 +922,35 @@ class NDAligner(BaseModel):
                     start_frame = current_frame
                     current_frame += duration
 
+                    symbol = symbols[token_idx]
+
+                    # Stress marks are absorbed into the next real symbol so
+                    # that their frames are not lost from the grid.
+                    if symbol in merge_symbols:
+                        if pending_start is None:
+                            pending_start = start_frame
+                        continue
+
                     if duration <= 0:
                         continue
 
                     token_id = int(batch.x[batch_idx, token_idx].item())
 
                     if not include_space_token_to_grid and token_id == separator_id:
+                        pending_start = None
                         continue
+
+                    if pending_start is not None:
+                        start_frame = pending_start
+                        pending_start = None
+
+                    label = "" if symbol in silent_symbols else symbol
 
                     sample_grid.append(
                         (
                             start_frame * sec_per_frame,
                             current_frame * sec_per_frame,
-                            symbols[token_idx],
+                            label,
                         )
                     )
 
@@ -1021,7 +969,7 @@ class NDAligner(BaseModel):
                 text_length = int(batch.x_lengths[batch_idx].item())
 
                 symbols = phone_symbols_per_sample[batch_idx]
-                ref_words = text.split()
+                ref_words = [_normalize_word(w) for w in text.split()]
 
                 matched = mapper(ref_seqs=ref_words, hyp_seqs=symbols)
                 cumulative_frames = torch.cat(
@@ -1101,6 +1049,77 @@ class NDAligner(BaseModel):
             phoneme_grid=phoneme_grid,
             word_grid=word_grid,
         )
+
+    @torch.no_grad()
+    def align_to_textgrid(
+        self,
+        wav_paths: str | Path | list[str | Path],
+        texts: str | list[str],
+        output_dir: str | Path,
+        include_space_token: bool = False,
+        silence_label: str = "",
+    ) -> list[Path]:
+        """Align waveforms and write one TextGrid per input file.
+
+        Produces a "words" tier and a "phones" tier. Gaps between predicted
+        intervals are filled with `silence_label` so that each tier covers the
+        full duration, as expected by Praat.
+        """
+        import textgrid as tg_mod
+
+        if isinstance(wav_paths, (str, Path)):
+            wav_path_list = [Path(wav_paths)]
+        else:
+            wav_path_list = [Path(p) for p in wav_paths]
+
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        out = self.inference_from_wavs(
+            wav_paths=wav_path_list,  # pyright: ignore[reportArgumentType]
+            texts=texts,
+            compute_phone_grid=True,
+            compute_word_grid=True,
+            include_space_token_to_grid=include_space_token,
+        )
+
+        assert out.phoneme_grid is not None
+        assert out.word_grid is not None
+
+        written: list[Path] = []
+
+        for i, wav_path in enumerate(wav_path_list):
+            duration = librosa.get_duration(path=str(wav_path))
+
+            tg = tg_mod.TextGrid(minTime=0.0, maxTime=duration)
+            for name, grid in (("words", out.word_grid[i]), ("phones", out.phoneme_grid[i])):
+                intervals: list[tuple[float, float, str]] = []
+                cursor = 0.0
+
+                for start, end, label in grid:
+                    start = max(start, cursor)
+                    end = min(end, duration)
+                    if end <= start:
+                        continue
+                    if start > cursor:
+                        intervals.append((cursor, start, silence_label))
+                    intervals.append((start, end, label if label.strip() else silence_label))
+                    cursor = end
+
+                if cursor < duration:
+                    intervals.append((cursor, duration, silence_label))
+
+                tier = tg_mod.IntervalTier(name=name, minTime=0.0, maxTime=duration)
+                for start, end, label in _merge_adjacent_silence(intervals, silence_label):
+                    tier.add(start, end, label)
+
+                tg.append(tier)
+
+            save_path = output_dir / f"{wav_path.stem}.TextGrid"
+            tg.write(str(save_path))
+            written.append(save_path)
+
+        return written
 
 
 class NDAlignerTrainingModuleForward(NamedTuple):

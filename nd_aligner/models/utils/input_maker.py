@@ -107,6 +107,7 @@ class AlignerInputMaker(nn.Module):
             tokenizer_type=tokenizer_type,
             fastspeech2_lexicon_path=fastspeech2_lexicon_path,
         )
+        self.tokenizer_type = tokenizer_type
 
         if audio_config.feature_type == "mel":
             self.spec_extractor = MelSpecExtractor(

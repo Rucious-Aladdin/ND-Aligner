@@ -9,7 +9,7 @@ from tqdm import tqdm
 
 from nd_aligner.config.ndaligner.data_config import DataConfig
 
-from .data_parser import LibriTTSParser, LJSpeechParser, VCTKParser
+from .data_parser import LibriSpeechParser, LibriTTSParser, LJSpeechParser, VCTKParser
 from .data_types import TrainBatch, TrainDatasetInstance, TrainItem
 from .dataset import TTSDataset
 from .quantile_bucket_sampler import QuantileDurationBatchSampler
@@ -128,6 +128,12 @@ class DataFactory:
                     root_dir=self.dataset_cfg.libritts_root,
                     spk_encoder_tag=self.config.preprocess.spk_encoder_type,
                     subsets=self.dataset_cfg.libritts_subsets,
+                )
+            elif ds_name == "librispeech":
+                parser = LibriSpeechParser(
+                    root_dir=self.dataset_cfg.librispeech_root,
+                    spk_encoder_tag=self.config.preprocess.spk_encoder_type,
+                    subsets=self.dataset_cfg.librispeech_subsets,
                 )
             else:
                 print(f"[Warning] Unknown dataset name: {ds_name}. Skipping.")

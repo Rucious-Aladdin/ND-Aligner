@@ -264,24 +264,165 @@ class LibriTTSParser(BaseDatasetParser):
         )
 
 
+class LibriSpeechParser(BaseDatasetParser):
+    def __init__(
+        self,
+        root_dir: str,
+        spk_encoder_tag: str = "",
+        subsets: list[str] | None = None,
+    ):
+        self.root_dir = root_dir
+        self.spk_encoder_tag = spk_encoder_tag
+        self.subsets = subsets
+
+    @override
+    def parse(self) -> ParsedItems:
+        items: list[TrainItem] = []
+
+        if self.subsets is None:
+            subsets = [
+                "train-clean-100",
+                "train-clean-360",
+                "train-other-500",
+            ]
+        else:
+            subsets = self.subsets
+
+        dataset_names = {
+            "train-clean-100": "librispeech-100",
+            "train-clean-360": "librispeech-360",
+            "train-other-500": "librispeech-500",
+        }
+
+        for subset in subsets:
+            subset_dir = os.path.join(
+                self.root_dir,
+                subset,
+            )
+
+            if not os.path.exists(subset_dir):
+                continue
+
+            if subset not in dataset_names:
+                raise ValueError(f"Unsupported LibriSpeech subset: {subset}")
+
+            dataset_name = dataset_names[subset]
+
+            audio_paths = sorted(
+                glob.glob(
+                    os.path.join(
+                        subset_dir,
+                        "**/*.wav",
+                    ),
+                    recursive=True,
+                )
+            )
+
+            transcript_cache: dict[
+                str,
+                dict[str, str],
+            ] = {}
+
+            for audio_path in audio_paths:
+                base_path = os.path.splitext(audio_path)[0]
+
+                utt_id = os.path.basename(base_path)
+
+                rel_path = os.path.relpath(
+                    audio_path,
+                    subset_dir,
+                )
+                parts = rel_path.split(os.sep)
+
+                spk_id = parts[0] if len(parts) > 0 else ""
+
+                chapter_dir = os.path.dirname(audio_path)
+
+                if chapter_dir not in transcript_cache:
+                    trans_paths = glob.glob(
+                        os.path.join(
+                            chapter_dir,
+                            "*.trans.txt",
+                        )
+                    )
+
+                    transcripts: dict[str, str] = {}
+
+                    for trans_path in trans_paths:
+                        with open(
+                            trans_path,
+                            "r",
+                            encoding="utf-8",
+                        ) as f:
+                            for line in f:
+                                line = line.strip()
+
+                                if not line:
+                                    continue
+
+                                parts_ = line.split(maxsplit=1)
+
+                                if len(parts_) != 2:
+                                    continue
+
+                                trans_utt_id, text = parts_
+
+                                transcripts[trans_utt_id] = text.strip()
+
+                    transcript_cache[chapter_dir] = transcripts
+
+                transcripts = transcript_cache[chapter_dir]
+
+                if utt_id not in transcripts:
+                    continue
+
+                text = transcripts[utt_id]
+
+                spk_path = base_path + f"_{self.spk_encoder_tag}_spk.pt"
+
+                if not os.path.exists(spk_path):
+                    spk_path = ""
+
+                items.append(
+                    TrainItem(
+                        audio_path=audio_path,
+                        spk_path=spk_path,
+                        text=text,
+                        utt_id=utt_id,
+                        spk_id=spk_id,
+                        dataset=dataset_name,
+                    )
+                )
+
+        return ParsedItems(
+            train_items=items,
+            test_items=None,
+        )
+
+
 if __name__ == "__main__":
-    vctk_parser = VCTKParser(
-        root_dir="/shared/data_zfs/blue2959/VCTK-preprocessed",
-        test_speaker_ids=["p229"],
-    )
-    items = vctk_parser.parse()
-    print(items.train_items[:3])
-    print(items.test_items[:3])  # type: ignore
+    # vctk_parser = VCTKParser(
+    #     root_dir="/shared/data_zfs/blue2959/VCTK-preprocessed",
+    #     test_speaker_ids=["p229"],
+    # )
+    # items = vctk_parser.parse()
+    # print(items.train_items[:3])
+    # print(items.test_items[:3])
 
     # libritts_parser = LibriTTSParser(root_dir="/shared/data_zfs/blue2959/LibriTTS-preprocessed")
     # items = libritts_parser.parse()
     # print(items[:3])
 
-    ljspeech_parser = LJSpeechParser(
-        root_dir="/shared/data_zfs/blue2959/LJSpeech-1.1-preprocessed",
-        num_test_samples=30,
-        test_split_seed=2026,
-    )
-    items = ljspeech_parser.parse()
+    # ljspeech_parser = LJSpeechParser(
+    #     root_dir="/shared/data_zfs/blue2959/LJSpeech-1.1-preprocessed",
+    #     num_test_samples=30,
+    #     test_split_seed=2026,
+    # )
+    # items = ljspeech_parser.parse()
+    # print(items.train_items[:3])
+    # print(items.test_items[:3])
+
+    librispeech_parser = LibriSpeechParser(root_dir="/shared/data_zfs/blue2959/LibriSpeech")
+    items = librispeech_parser.parse()
     print(items.train_items[:3])
-    print(items.test_items[:3])  # type: ignore
+    print(len(items.train_items))

@@ -1,4 +1,3 @@
-# use 22050 hifi-gan for compatibility
 import os
 import os.path
 from dataclasses import dataclass, field
@@ -19,8 +18,8 @@ def spk_dim() -> int:
 
 @dataclass(frozen=True)
 class PreprocessConfigs:
-    data_root_dir: str = os.path.join(DATA_ROOT_DIR, "LibriTTS")
-    preprocessed_dir: str = os.path.join(DATA_ROOT_DIR, "LibriTTS-preprocessed-trimmed-16k")
+    data_root_dir: str = os.path.join(DATA_ROOT_DIR, "LibriSpeech")
+    preprocessed_dir: str = os.path.join(DATA_ROOT_DIR, "LibriSpeech-preprocessed-trimmed-16k")
     spk_encoder_type: str = SPK_ENCODER_TYPE
     spk_embedding_dim: int = field(default_factory=spk_dim)
 
