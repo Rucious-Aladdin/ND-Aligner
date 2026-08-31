@@ -49,7 +49,7 @@ def cache_dir_name() -> str:
     )
 
 
-def dataset_postfix(x) -> str:
+def dataset_postfix(x: str) -> str:
     if SAMPLE_RATE == 16_000:
         return f"{x}-16k"
     elif SAMPLE_RATE == 22_050:
@@ -148,7 +148,7 @@ class ExperimentConfigs:
     exp_variant: str = "vctk+librispeech"
 
     timit_val_root_dir: str = "/shared/data_zfs/blue2959/TIMIT_val_250/TRAIN"
-    timit_confirm_roor_dir: str = "/shared/data_zfs/blue2959/TIMIT_confirm_1000/TRAIN"
+    timit_confirm_root_dir: str = "/shared/data_zfs/blue2959/TIMIT_confirm_1000/TRAIN"
     timit_test_root_dir: str = "/shared/data_zfs/blue2959/TIMIT/TEST"
     timit_sr: int = 16_000
 

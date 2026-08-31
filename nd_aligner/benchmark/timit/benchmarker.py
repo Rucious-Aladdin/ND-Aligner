@@ -6,7 +6,7 @@ import math
 import random
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import NamedTuple, override
+from typing import TYPE_CHECKING, NamedTuple, override
 
 import torch
 from tqdm import tqdm
@@ -19,8 +19,12 @@ from nd_aligner.models.utils.lev_words_mapper import (
     WordSegment,
     normalize_ref_word,
 )
+from nd_aligner.tokenizer.closure_tokenizer import CLOSURE_SYMBOLS, ClosureESPEAKTokenizer
 
 from ..utils.entropy import compute_framewise_entropy
+
+if TYPE_CHECKING:
+    from matplotlib.axes import Axes
 
 
 class TIMITMetrics(NamedTuple):
@@ -82,6 +86,9 @@ class TIMITBenchMarker:
             tokenizer=self.tokenizer,
             hyp_ignore_symbols=hyp_ignore_symbols,
             max_ref_words_per_hyp_word=max_ref_words_per_hyp_word,
+            span_only_symbols=(
+                CLOSURE_SYMBOLS if isinstance(self.tokenizer, ClosureESPEAKTokenizer) else None
+            ),  # pyright: ignore[reportArgumentType]
         )
 
         if boundary_mode not in ("both", "start", "end"):
@@ -727,7 +734,7 @@ class TIMITBenchMarker:
 
     @staticmethod
     def _plot_alignment_matrix(
-        ax,
+        ax: Axes,
         mat: torch.Tensor,
         y_labels: list[str],
         title: str,

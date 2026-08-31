@@ -664,7 +664,7 @@ class LinearCRFAligner(nn.Module):
 
         # log_alpha, log_beta:
         # Shape: (B, T_speech, T_text)
-        log_alpha, log_beta = MonotoneForwardBackwardCUDA.apply(  # type: ignore
+        log_alpha, log_beta = MonotoneForwardBackwardCUDA.apply(
             log_phi,
             mask,
             opt_sep_mask,

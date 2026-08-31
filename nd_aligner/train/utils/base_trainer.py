@@ -34,7 +34,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
         self.model: BaseModel | None = None
         self.optimizer: torch.optim.Optimizer | None = None
         self.scheduler: torch.optim.lr_scheduler.LRScheduler | None = None
-        self.scaler: torch.amp.GradScaler | None = None  # pyright: ignore[reportPrivateImportUsage]
+        self.scaler: torch.amp.GradScaler | None = None
 
         self.global_step = 0
         self.start_epoch = 1
@@ -154,7 +154,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
 
         if self.train_cfg.fp16_run and self.device.type == "cuda":
             print("⚡  AMP (Automatic Mixed Precision) Enabled.")
-            self.scaler = torch.amp.GradScaler("cuda")  # pyright: ignore[reportPrivateImportUsage]
+            self.scaler = torch.amp.GradScaler("cuda")
 
         if self.train_cfg.val_sanity_check:
             self._run_validation_sanity_check(self.global_step)
@@ -336,7 +336,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
 
         for batch in self.valid_loader:
             batch = self.move_batch_to_device(batch)
-            with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
+            with torch.amp.autocast("cuda", enabled=self.scaler is not None):
                 weighted_val_loss, metrics, output = self.validation_step(
                     batch,
                     epoch=epoch,
@@ -450,7 +450,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
 
         self.model.train()
 
-        with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
+        with torch.amp.autocast("cuda", enabled=self.scaler is not None):
             weighted_loss, metrics, output = self.train_step(batch, epoch, step)
             scaled_loss = weighted_loss / self.train_cfg.grad_accumulation_steps
 
@@ -521,7 +521,7 @@ class BaseTrainer(ABC, Generic[T_DataConfig, T_ModelConfig]):
 
             batch = self.move_batch_to_device(batch)
 
-            with torch.amp.autocast("cuda", enabled=self.scaler is not None):  # type: ignore
+            with torch.amp.autocast("cuda", enabled=self.scaler is not None):
                 val_loss, val_metrics, output = self.validation_step(batch, epoch=0, step=step)
 
             self.on_valid_epoch_end(

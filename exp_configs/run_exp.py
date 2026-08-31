@@ -47,7 +47,7 @@ def discover_experiments(config_root: Path) -> list[Path]:
 
 def run_one_experiment(exp_dir: Path) -> None:
     """
-    Call tts.train.train_nd_aligner.main() with temporary argv.
+    Call nd_aligner.train.train.main() with temporary argv.
     """
     from nd_aligner.train.train import main as train_main
 
@@ -62,7 +62,7 @@ def run_one_experiment(exp_dir: Path) -> None:
     old_argv = sys.argv[:]
     try:
         sys.argv = [
-            "train_nd_aligner.py",
+            "train.py",
             "-c",
             str(data_config),
             "-m",
@@ -181,7 +181,7 @@ def main() -> None:
     args = parse_args()
 
     # Important:
-    # Set CUDA_VISIBLE_DEVICES before importing train_nd_aligner / torch.
+    # Set CUDA_VISIBLE_DEVICES before importing train / torch.
     if args.gpu is not None:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu
 

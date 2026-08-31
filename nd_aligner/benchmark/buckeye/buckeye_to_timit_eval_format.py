@@ -3,10 +3,13 @@ from __future__ import annotations
 import argparse
 import re
 from collections import Counter
+from collections.abc import Iterable
 from pathlib import Path
 
+import numpy as np
 import soundfile as sf
 from praatio import textgrid as tgio
+from praatio.utilities.constants import Interval
 from tqdm.auto import tqdm
 
 SPECIAL_LABELS = {
@@ -27,10 +30,14 @@ ANGLE_TOKEN_PATTERN = re.compile(r"^<[^>]*>$")
 BRACE_TOKEN_PATTERN = re.compile(r"^\{[^}]*\}$")
 
 
-def entry_values(entry) -> tuple[float, float, str]:
+def entry_values(entry: Interval | tuple[float, float, str]) -> tuple[float, float, str]:
     """Support both praatio Interval objects and tuple-like entries."""
     if hasattr(entry, "start"):
-        return float(entry.start), float(entry.end), str(entry.label)
+        return (
+            float(entry.start),  # pyright: ignore[reportAttributeAccessIssue]
+            float(entry.end),  # pyright: ignore[reportAttributeAccessIssue]
+            str(entry.label),  # pyright: ignore[reportAttributeAccessIssue]
+        )
 
     return float(entry[0]), float(entry[1]), str(entry[2])
 
@@ -110,7 +117,7 @@ def seconds_to_sample(time_sec: float, sample_rate: int) -> int:
 
 
 def select_words_for_utterance(
-    word_entries,
+    word_entries: Iterable[Interval | tuple[float, float, str]],
     utterance_start: float,
     utterance_end: float,
 ) -> list[tuple[float, float, str]]:
@@ -139,7 +146,7 @@ def select_words_for_utterance(
 
 def write_chunk(
     *,
-    audio,
+    audio: np.ndarray,
     sample_rate: int,
     subtype: str,
     crop_start: int,
@@ -238,7 +245,9 @@ def process_recording(
     output_index = 0
 
     for _source_index, utterance_entry in enumerate(utterance_entries):
-        utterance_start, utterance_end, utterance_label = entry_values(utterance_entry)
+        utterance_start, utterance_end, utterance_label = entry_values(
+            utterance_entry  # pyright: ignore[reportArgumentType]
+        )
 
         utterance_label = utterance_label.strip()
 
@@ -247,7 +256,7 @@ def process_recording(
             continue
 
         words = select_words_for_utterance(
-            word_entries,
+            word_entries,  # pyright: ignore[reportArgumentType]
             utterance_start,
             utterance_end,
         )

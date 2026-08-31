@@ -1,6 +1,7 @@
 """from https://github.com/keithito/tacotron"""
 
 import re
+from collections.abc import Iterable
 
 from . import cleaners
 from .symbols import symbols
@@ -13,7 +14,7 @@ _id_to_symbol = {i: s for i, s in enumerate(symbols)}
 _curly_re = re.compile(r"(.*?)\{(.+?)\}(.*)")
 
 
-def text_to_sequence(text, cleaner_names):
+def text_to_sequence(text: str, cleaner_names: Iterable[str]) -> list[int]:
     """Converts a string of text to a sequence of IDs corresponding to the symbols in the text.
 
     The text can optionally have ARPAbet sequences enclosed in curly braces embedded
@@ -26,7 +27,7 @@ def text_to_sequence(text, cleaner_names):
     Returns:
       List of integers corresponding to the symbols in the text
     """
-    sequence = []
+    sequence: list[int] = []
 
     # Check for curly braces and treat their contents as ARPAbet:
     while len(text):
@@ -42,7 +43,7 @@ def text_to_sequence(text, cleaner_names):
     return sequence
 
 
-def sequence_to_text(sequence):
+def sequence_to_text(sequence: Iterable[int]) -> str:
     """Converts a sequence of IDs back to a string"""
     result = ""
     for symbol_id in sequence:
@@ -55,7 +56,7 @@ def sequence_to_text(sequence):
     return result.replace("}{", " ")
 
 
-def _clean_text(text, cleaner_names):
+def _clean_text(text: str, cleaner_names: Iterable[str]) -> str:
     for name in cleaner_names:
         cleaner = getattr(cleaners, name)
         if not cleaner:
@@ -64,13 +65,13 @@ def _clean_text(text, cleaner_names):
     return text
 
 
-def _symbols_to_sequence(symbols):
+def _symbols_to_sequence(symbols: Iterable[str]) -> list[int]:
     return [_symbol_to_id[s] for s in symbols if _should_keep_symbol(s)]
 
 
-def _arpabet_to_sequence(text):
+def _arpabet_to_sequence(text: str) -> list[int]:
     return _symbols_to_sequence(["@" + s for s in text.split()])
 
 
-def _should_keep_symbol(s):
+def _should_keep_symbol(s: str) -> bool:
     return s in _symbol_to_id and s != "_" and s != "~"

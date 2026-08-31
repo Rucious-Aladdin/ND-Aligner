@@ -3,63 +3,49 @@ name = "nd_aligner"
 version = "0.5.0"
 description = "ND-Aligner"
 readme = "README.md"
-requires-python = ">=3.13,<3.14"
+requires-python = ">=3.14,<3.15"
 authors = [{ name = "Suseong Kim", email = "blue29591@postech.ac.kr" }]
 dependencies = [
-  "cython>=3.2.4",
-  "dacite>=1.9.2",
-  "einops>=0.8.2",
-  "fastdtw>=0.3.4",
-  "g2p-en>=2.1.0",
-  "glob2>=0.7",
-  "huggingface-hub<1.0",
-  "inflect>=7.5.0",
-  "ipykernel>=7.2.0",
-  "librosa>=0.11.0",
-  "matplotlib>=3.10.8",
-  "ninja>=1.13.0",
-  "nltk>=3.9.3",
-  "noisereduce>=3.0.3",
-  "numpy>=2.3.5",
-  "onnx-pytorch>=0.1.5",
-  "onnxscript>=0.6.2",
-  "pandas>=3.0.1",
-  "phonemizer>=3.3.0",
-  "praatio>=6.2.2",
-  "pysptk>=1.0.1",
-  "pytest>=9.0.2",
-  "pyworld>=0.3.5",
-  "resemblyzer>=0.1.4",
-  "scipy>=1.17.1",
-  "silero-vad>=6.2.1",
-  "soundfile>=0.13.1",
-  "speechbrain>=1.0.0",
-  "tensorboard>=2.20.0",
-  "textgrid>=1.6.1",
-  "tgt>=1.5",
-  "torch>=2.10.0",
-  "torchaudio>=2.10.0",
-  "tqdm>=4.66.5",
-  "umap-learn>=0.5.12",
-  "unidecode>=1.4.0",
+  "dacite~=1.9",
+  "einops~=0.8.2",
+  "g2p-en~=2.1",
+  "inflect~=7.5",
+  "librosa~=1.0",
+  "matplotlib~=3.11",
+  "ninja~=1.13",
+  "nltk~=3.10",
+  "noisereduce~=3.0",
+  "numpy~=2.5",
+  "nvidia-cuda-cccl==13.0.85",
+  "nvidia-cuda-crt==13.0.88",
+  "nvidia-cuda-nvcc==13.0.88",
+  "nvidia-nvvm==13.0.88",
+  "onnxruntime-gpu~=1.29",
+  "phonemizer~=3.4",
+  "praatio~=6.2",
+  "resemblyzer~=0.1.4",
+  "scipy~=1.18",
+  "setuptools<81",             # to provide pkg_resources for webrtcvad required by resemblyzer
+  "silero-vad~=6.2",
+  "soundfile~=0.14.0",
+  "tensorboard~=2.21",
+  "textgrid~=1.6",
+  "torch==2.13.0",
+  "tqdm~=4.70",
+  "unidecode~=1.4",
 ]
 
 [dependency-groups]
-dev = []
+dev = ["black~=26.5", "ipykernel~=7.3", "isort~=9.0", "pandas~=3.0", "pyright~=1.1"]
 
 [build-system]
-requires = ["uv_build>=0.9.11,<0.10.0"]
+requires = ["uv_build>=0.9.11,<0.13.0"]
 build-backend = "uv_build"
 
 [tool.uv]
 required-version = ">=0.9.11"
 keyring-provider = "subprocess"
 reinstall-package = ["onnxruntime-gpu"]
-
-[[tool.uv.index]]
-name = "pytorch-cu128"
-url = "https://download.pytorch.org/whl/cu128"
-explicit = false
 
 [tool.uv.build-backend]
 module-name = "nd_aligner"
@@ -68,11 +54,11 @@ source-exclude = []
 
 [tool.black]
 line-length = 100
-target-version = ["py313"]
+target-version = ["py314"]
 
 [tool.pyright]
-include = ["nd_aligner"]
-pythonVersion = "3.13"
+include = ["nd_aligner", "exp_configs", "scripts", "demo", "figures"]
+pythonVersion = "3.14"
 pythonPlatform = "Linux"
 deprecateTypingAliases = true
 typeCheckingMode = "basic"
@@ -108,7 +94,3 @@ reportInvalidStringEscapeSequence = "none"
 [tool.isort]
 profile = "black"
 line_length = 100
-
-[tool.pytest]
-addopts = ["--import-mode=importlib"]
-markers = ["cfgs"]

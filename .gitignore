@@ -9,7 +9,20 @@ exp_configs/**/*.json
 output/
 results/
 
+# Build
+nd_aligner/models/modules/forward_backward/build
+
 # Python cache
 __pycache__/
 *.py[cod]
 *$py.class
+
+# VSCode
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+!.vscode/tasks.json
+
+# Machine-specific files
+/.clangd
+*.so
