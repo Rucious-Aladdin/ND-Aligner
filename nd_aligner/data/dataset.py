@@ -30,7 +30,6 @@ class TTSDataset(Dataset[TrainDatasetInstance]):
 
         self.tokenizer = load_tokenizer(
             tokenizer_type=config.dataset.tokenizer_type,
-            fastspeech2_lexicon_path=config.dataset.fastspeech2_lexicon_path,
         )
 
         self.feature_type = config.audio.feature_type

@@ -7,11 +7,18 @@ import torch
 import torch.nn.functional as F
 
 from nd_aligner.models.modules.coupling_decoder import CouplingDecoder, CouplingDecoderOutput
-from nd_aligner.models.modules.crf_aligner import LinearCRFAligner, _validate_decoding_strategy
+from nd_aligner.models.modules.crf_aligner import LinearCRFAligner, validate_decoding_strategy
 from nd_aligner.models.modules.decoder import Decoder
 from nd_aligner.models.modules.spec_encoder import SpecEncoder
 from nd_aligner.models.modules.text_encoder import TextEncoder
 from nd_aligner.models.modules.utils.sequence_mask import sequence_mask
+from nd_aligner.models.utils.alignment_grid import (
+    GridSymbolPolicy,
+    build_phone_grid,
+    build_word_grid,
+    normalize_word,
+    to_praat_intervals,
+)
 from nd_aligner.models.utils.diagonal_loss import compute_beta_binomial_loss
 from nd_aligner.models.utils.input_maker import AlignerInputMaker
 
@@ -67,7 +74,6 @@ def init_nd_aligner(
             audio_config=config.audio,
             preprocess_config=config.preprocess,
             tokenizer_type=config.tokenizer_type,
-            fastspeech2_lexicon_path=config.fastspeech2_tokenizer_lexion_path,
             zero_nonspeech_region=config.input_maker.zero_non_speech_region,
             trim_nonspeech_region=config.input_maker.trim_non_speech_region,
             suppress_impulsive_peak=config.input_maker.suppress_impulsive_peak,
@@ -189,51 +195,6 @@ class AlignerInference(NamedTuple):
     # grid output
     phoneme_grid: list[list[tuple[float, float, str]]] | None  # (start_sec, end_sec, phone)
     word_grid: list[list[tuple[float, float, str]]] | None  # (start_sec, end_sec, word)
-
-
-_WORD_STRIP_CHARS = ' \t\n\r;:,.!?¡¿—…"«»“”()[]{}'
-
-
-def _normalize_word(word: str) -> str:
-    """Strip surrounding punctuation while keeping internal apostrophes."""
-    return word.strip().strip(_WORD_STRIP_CHARS)
-
-
-# eSpeak character-level IPA emits stress marks as separate tokens; they carry
-# no duration of their own and are merged into the following symbol.
-_ESPEAK_MERGE_LEFT_SYMBOLS = frozenset({"ˈ", "ˌ"})
-
-# Punctuation tokens occupy frames but do not correspond to a phone; they are
-# kept as silence intervals so that the grid stays contiguous.
-_ESPEAK_SILENT_SYMBOLS = frozenset(",.;:!?—…")
-
-
-def _grid_ignored_symbols(tokenizer_type: str) -> frozenset[str]:
-    if tokenizer_type == "espeak":
-        return _ESPEAK_MERGE_LEFT_SYMBOLS
-    return frozenset()
-
-
-def _grid_silent_symbols(tokenizer_type: str) -> frozenset[str]:
-    if tokenizer_type == "espeak":
-        return _ESPEAK_SILENT_SYMBOLS
-    return frozenset()
-
-
-def _merge_adjacent_silence(
-    intervals: list[tuple[float, float, str]],
-    silence_label: str,
-) -> list[tuple[float, float, str]]:
-    """Collapse consecutive silence intervals into a single interval."""
-    merged: list[tuple[float, float, str]] = []
-
-    for start, end, label in intervals:
-        if merged and label == silence_label and merged[-1][2] == silence_label:
-            merged[-1] = (merged[-1][0], end, silence_label)
-        else:
-            merged.append((start, end, label))
-
-    return merged
 
 
 class NDAligner(BaseModel):
@@ -628,7 +589,7 @@ class NDAligner(BaseModel):
             "posterior_viterbi": Viterbi-style decoding from log posterior marginals.
             "mea": maximum-expected-accuracy decoding from posterior marginals.
         """
-        _validate_decoding_strategy(strategy)
+        validate_decoding_strategy(strategy)
         self.decoding_strategy = strategy
 
     def _make_opt_sep_mask(
@@ -896,147 +857,60 @@ class NDAligner(BaseModel):
 
             phone_symbols_per_sample.append(symbols)
             phone_strings.append(tokenizer.to_token_string(text))
-            word_strings.append(" ".join(_normalize_word(w) for w in text.split()))
+            word_strings.append(" ".join(normalize_word(w) for w in text.split()))
+
+        sec_per_frame = hop_length / model_sr
 
         sec_per_frame = hop_length / model_sr
 
         # ------------------------------------------------------------
-        # 6. Optional phoneme grid.
+        # 6. Optional phoneme and word grids.
         # ------------------------------------------------------------
         phoneme_grid: list[list[tuple[float, float, str]]] | None = None
-        if compute_phone_grid:
-            phoneme_grid = []
-            merge_symbols = _grid_ignored_symbols(self.input_maker.tokenizer_type)
-            silent_symbols = _grid_silent_symbols(self.input_maker.tokenizer_type)
-
-            for batch_idx, symbols in enumerate(phone_symbols_per_sample):
-                text_length = int(batch.x_lengths[batch_idx].item())
-
-                current_frame = 0
-                pending_start: int | None = None
-                sample_grid: list[tuple[float, float, str]] = []
-
-                for token_idx in range(text_length):
-                    duration = int(durations[batch_idx, token_idx].item())
-
-                    start_frame = current_frame
-                    current_frame += duration
-
-                    symbol = symbols[token_idx]
-
-                    # Stress marks are absorbed into the next real symbol so
-                    # that their frames are not lost from the grid.
-                    if symbol in merge_symbols:
-                        if pending_start is None:
-                            pending_start = start_frame
-                        continue
-
-                    if duration <= 0:
-                        continue
-
-                    token_id = int(batch.x[batch_idx, token_idx].item())
-
-                    if not include_space_token_to_grid and token_id == separator_id:
-                        pending_start = None
-                        continue
-
-                    if pending_start is not None:
-                        start_frame = pending_start
-                        pending_start = None
-
-                    label = "" if symbol in silent_symbols else symbol
-
-                    sample_grid.append(
-                        (
-                            start_frame * sec_per_frame,
-                            current_frame * sec_per_frame,
-                            label,
-                        )
-                    )
-
-                phoneme_grid.append(sample_grid)
-
-        # ------------------------------------------------------------
-        # 7. Optional word grid.
-        # ------------------------------------------------------------
         word_grid: list[list[tuple[float, float, str]]] | None = None
 
-        if compute_word_grid:
-            mapper = self.input_maker.word_mapper
-            word_grid = []
+        if compute_phone_grid or compute_word_grid:
+            policy = GridSymbolPolicy.for_tokenizer(
+                tokenizer=tokenizer,
+                tokenizer_type=self.input_maker.tokenizer_type,
+            )
+
+            phoneme_grid = [] if compute_phone_grid else None
+            word_grid = [] if compute_word_grid else None
 
             for batch_idx, text in enumerate(batch.texts):
                 text_length = int(batch.x_lengths[batch_idx].item())
 
                 symbols = phone_symbols_per_sample[batch_idx]
-                ref_words = [_normalize_word(w) for w in text.split()]
+                token_ids = batch.x[batch_idx, :text_length].detach().cpu().tolist()
+                token_durations = durations[batch_idx, :text_length].detach().cpu().tolist()
 
-                matched = mapper(ref_seqs=ref_words, hyp_seqs=symbols)
-                cumulative_frames = torch.cat(
-                    [durations.new_zeros(1), durations[batch_idx, :text_length].cumsum(dim=0)],
-                    dim=0,
-                )
-
-                match_by_hyp_start: dict[
-                    int,
-                    tuple[slice, slice],
-                ] = {
-                    cast(int, hyp_slice.start): (ref_slice, hyp_slice)
-                    for ref_slice, hyp_slice in zip(
-                        matched.ref_matched_indices,
-                        matched.hyp_matched_indices,
-                        strict=True,
+                if phoneme_grid is not None:
+                    phoneme_grid.append(
+                        build_phone_grid(
+                            symbols=symbols,
+                            token_ids=token_ids,
+                            durations=token_durations,
+                            sec_per_frame=sec_per_frame,
+                            separator_id=separator_id,
+                            include_separator=include_space_token_to_grid,
+                            policy=policy,
+                        )
                     )
-                }
 
-                sample_grid: list[tuple[float, float, str]] = []
-
-                token_idx = 0
-
-                while token_idx < text_length:
-                    matched_item = match_by_hyp_start.get(token_idx)
-
-                    if matched_item is not None:
-                        ref_slice, hyp_slice = matched_item
-
-                        ref_start = cast(int, ref_slice.start)
-                        ref_stop = cast(int, ref_slice.stop)
-                        hyp_start = cast(int, hyp_slice.start)
-                        hyp_stop = cast(int, hyp_slice.stop)
-
-                        start_frame = int(cumulative_frames[hyp_start].item())
-                        end_frame = int(cumulative_frames[hyp_stop].item())
-
-                        if end_frame > start_frame:
-                            label = " ".join(ref_words[ref_start:ref_stop])
-
-                            sample_grid.append(
-                                (
-                                    start_frame * sec_per_frame,
-                                    end_frame * sec_per_frame,
-                                    label,
-                                )
-                            )
-
-                        token_idx = hyp_stop
-                        continue
-
-                    token_id = int(batch.x[batch_idx, token_idx].item())
-                    if include_space_token_to_grid and token_id == separator_id:
-                        start_frame = int(cumulative_frames[token_idx].item())
-                        end_frame = int(cumulative_frames[token_idx + 1].item())
-
-                        if end_frame > start_frame:
-                            sample_grid.append(
-                                (
-                                    start_frame * sec_per_frame,
-                                    end_frame * sec_per_frame,
-                                    " ",
-                                )
-                            )
-                    token_idx += 1
-
-                word_grid.append(sample_grid)
+                if word_grid is not None:
+                    word_grid.append(
+                        build_word_grid(
+                            ref_words=[normalize_word(w) for w in text.split()],
+                            symbols=symbols,
+                            token_ids=token_ids,
+                            durations=token_durations,
+                            sec_per_frame=sec_per_frame,
+                            separator_id=separator_id,
+                            include_separator=include_space_token_to_grid,
+                            mapper=self.input_maker.word_mapper,
+                        )
+                    )
 
         return AlignerInference(
             token_ids=batch.x,
@@ -1092,25 +966,11 @@ class NDAligner(BaseModel):
             duration = librosa.get_duration(path=str(wav_path))
 
             tg = tg_mod.TextGrid(minTime=0.0, maxTime=duration)
+
             for name, grid in (("words", out.word_grid[i]), ("phones", out.phoneme_grid[i])):
-                intervals: list[tuple[float, float, str]] = []
-                cursor = 0.0
-
-                for start, end, label in grid:
-                    start = max(start, cursor)
-                    end = min(end, duration)
-                    if end <= start:
-                        continue
-                    if start > cursor:
-                        intervals.append((cursor, start, silence_label))
-                    intervals.append((start, end, label if label.strip() else silence_label))
-                    cursor = end
-
-                if cursor < duration:
-                    intervals.append((cursor, duration, silence_label))
-
                 tier = tg_mod.IntervalTier(name=name, minTime=0.0, maxTime=duration)
-                for start, end, label in _merge_adjacent_silence(intervals, silence_label):
+
+                for start, end, label in to_praat_intervals(grid, duration, silence_label):
                     tier.add(start, end, label)
 
                 tg.append(tier)

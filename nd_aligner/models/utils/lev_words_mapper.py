@@ -71,12 +71,10 @@ class LevensteinWordsMapper:
         tokenizer: BaseTokenizer,
         hyp_ignore_symbols: set[str] | None = None,
         max_ref_words_per_hyp_word: int = 5,
-        span_only_symbols: set[str] | None = None,
     ) -> None:
         self.tokenizer = tokenizer
         self.hyp_ignore_symbols = set(hyp_ignore_symbols or set())
         self.max_ref_words_per_hyp_word = max_ref_words_per_hyp_word
-        self.span_only_symbols = set(span_only_symbols or set())
 
     def __call__(
         self,
@@ -144,12 +142,14 @@ class LevensteinWordsMapper:
             start = None
             stop = None
 
+        span_only_symbols = self.tokenizer.span_only_symbols
+
         for idx, symbol in enumerate(hyp_symbols):
             if symbol == " ":
                 flush()
                 continue
 
-            if symbol in self.span_only_symbols:
+            if symbol in span_only_symbols:
                 if start is None:
                     start = idx
                 stop = idx + 1
@@ -321,7 +321,6 @@ if __name__ == "__main__":
 
     from tqdm import tqdm
 
-    from nd_aligner.tokenizer.arpa_tokenizer import ARPATokenizer
     from nd_aligner.tokenizer.espeak_tokenizer import ESPEAKTokenizer
 
     def read_timit_wrd(wrd_path: str | Path) -> list[WordSegment]:
@@ -491,8 +490,7 @@ if __name__ == "__main__":
 
         return matched.coverage_ratio
 
-    # tokenizer = ESPEAKTokenizer()
-    tokenizer = ARPATokenizer()
+    tokenizer = ESPEAKTokenizer()
 
     mapper = LevensteinWordsMapper(
         tokenizer=tokenizer,

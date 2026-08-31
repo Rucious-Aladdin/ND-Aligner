@@ -78,9 +78,6 @@ class BaseTokenizer(ABC):
         Example:
             IPA tokenizer:
                 "Please call Stella." -> "<sp> pliːz ... <sp>"
-
-            FastSpeech2 tokenizer:
-                "Please call Stella." -> "{<sp> P L IY1 Z ... <sp>}"
         """
         raise NotImplementedError()
 
@@ -112,3 +109,19 @@ class BaseTokenizer(ABC):
     @abstractmethod
     def ignore_symbols(self) -> set[str]:
         raise NotImplementedError()
+
+    @property
+    def span_only_symbols(self) -> set[str]:
+        """
+        Symbols that occupy a token position inside a word but contribute no
+        character to it.
+
+        Code that aligns decoded symbols against reference words must advance
+        its token span across these symbols while leaving the match key
+        unchanged, which is neither what ignore_symbols asks for (those are
+        skipped entirely) nor what an ordinary symbol asks for.
+
+        Defaults to the empty set; tokenizers that emit such symbols override
+        this.
+        """
+        return set()

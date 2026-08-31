@@ -83,7 +83,6 @@ class AlignerInputMaker(nn.Module):
         audio_config: AudioConfigs,
         preprocess_config: PreprocessConfigs,
         tokenizer_type: str,
-        fastspeech2_lexicon_path: str = "",
         zero_nonspeech_region: bool = False,
         trim_nonspeech_region: bool = True,
         suppress_impulsive_peak: bool = False,
@@ -105,7 +104,6 @@ class AlignerInputMaker(nn.Module):
 
         self.tokenizer = load_tokenizer(
             tokenizer_type=tokenizer_type,
-            fastspeech2_lexicon_path=fastspeech2_lexicon_path,
         )
         self.tokenizer_type = tokenizer_type
 

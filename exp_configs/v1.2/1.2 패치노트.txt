@@ -1,8 +1,0 @@
-1. local-support에서 window shifting logic이 사라지고, truncated window로 전환됨
-2. conv_RF를 17까지 늘림 (num_layers=8)
-3. convolution module에 residual connection추가
-4. 모델 초기화 시 seed 고정
-5. radius의 기본값을 20으로 변경
-6. TIMIT train에서 평가 샘플수를 250개로 변경
-7. softmax normalization을 skip할수 있는 ablation 추가
-8. optional_skip_seperator topology가 추가됨. 이제 DP에서 두 단어 사이의 <blank> token을 뛰어넘는 jump가 가능해짐

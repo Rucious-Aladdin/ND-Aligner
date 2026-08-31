@@ -4,7 +4,6 @@ from nd_aligner.config.preprocess.preprocess_config import PreprocessConfigs, sp
 from nd_aligner.tokenizer.load_tokenizer import load_tokenizer
 
 from .data_config import (
-    ARPA_TOKENIZER_LEXION_PATH,
     INPUT_FEATURE_TYPE,
     N_FFT,
     N_MELS,
@@ -73,7 +72,7 @@ class SpecDecoderConfigs:
     dropout: float = 0.15
 
     coupling_cond_proj_dim: int = 128
-    coupling_num_refine_steps: int = 6
+    coupling_num_refine_steps: int = 8
     coupling_step_emb_dim: int = 64
     coupling_loss_decay_factor: float = 1.0
     coupling_kernel_size: int = 3
@@ -127,6 +126,5 @@ class NDAlignerConfigs:
     use_optional_skip_sep: bool = USE_OPTIONAL_SKIP_SEP
 
     tokenizer_type: str = TOKENIZER_TYPE
-    fastspeech2_tokenizer_lexion_path = ARPA_TOKENIZER_LEXION_PATH
     separator_token_id: int = tokenizer.seperator_id
     viterbi_ste_training: bool = False

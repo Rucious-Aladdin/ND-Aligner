@@ -10,8 +10,7 @@ INPUT_FEATURE_TYPE = "mel"
 # INPUT_FEATURE_TYPE: str = "linspec"
 
 DATA_PARENT_DIR = "/shared/data_zfs/blue2959"
-TOKENIZER_TYPE: str = "espeak"  # "arpa"
-ARPA_TOKENIZER_LEXION_PATH = "./nd_aligner/baseline/FastSpeech2/lexicon/vctk-lexicon.txt"
+TOKENIZER_TYPE: str = "espeak_closure"  # "espeak"
 
 N_MELS = 80
 N_FFT = 1024
@@ -26,9 +25,9 @@ HOP_LENGTH = 160
 
 # ==================================
 
-# DATASETS = ["vctk"]
+DATASETS = ["vctk"]
 # DATASETS = ["vctk", "libritts"]
-DATASETS = ["vctk", "librispeech"]
+# DATASETS = ["vctk", "librispeech"]
 
 
 def cache_dir_name() -> str:
@@ -135,7 +134,6 @@ class DatasetConfigs:
     max_duration_sec: float = 15.0
 
     tokenizer_type: str = TOKENIZER_TYPE
-    fastspeech2_lexicon_path: str = ARPA_TOKENIZER_LEXION_PATH
 
 
 @dataclass(frozen=True)
@@ -143,9 +141,9 @@ class ExperimentConfigs:
     train_time_eval_logging: bool = True
     train_time_eval_per_step: int = 1000
 
-    base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.2/main"
-    exp_name: str = "vctk+librispeech"
-    exp_variant: str = "vctk+librispeech"
+    base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.3/main"
+    exp_name: str = "vctk"
+    exp_variant: str = "vctk"
 
     timit_val_root_dir: str = "/shared/data_zfs/blue2959/TIMIT_val_250/TRAIN"
     timit_confirm_root_dir: str = "/shared/data_zfs/blue2959/TIMIT_confirm_1000/TRAIN"
@@ -156,8 +154,8 @@ class ExperimentConfigs:
 @dataclass(frozen=True)
 class TrainConfigs:
     # --- Logging & Checkpointing ---
-    log_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.2/runs/main"
-    run_name: str = "nd_aligner_vctk+libritts_test"
+    log_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.3/runs/main"
+    run_name: str = "nd_aligner_vctk"
 
     continue_path: str = ""
     continue_dir: str = ""

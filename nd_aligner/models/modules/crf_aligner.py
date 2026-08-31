@@ -232,7 +232,7 @@ class NodePotentialPredictor(nn.Module):
 
         if self.unary_network_type == "l2":
             diff = h_spec_t.unsqueeze(2) - h_text_t.unsqueeze(1)
-            unary_potential = diff.square().sum(dim=-1)
+            unary_potential = -diff.square().sum(dim=-1)
             unary_potential = unary_potential * self.evidence_scale.exp()
             return unary_potential
 
@@ -277,7 +277,7 @@ DECODING_STRATEGIES = {
 }
 
 
-def _validate_decoding_strategy(decoding_strategy: str) -> None:
+def validate_decoding_strategy(decoding_strategy: str) -> None:
     if decoding_strategy not in DECODING_STRATEGIES:
         raise ValueError(
             f"Unknown decoding_strategy={decoding_strategy!r}. "
@@ -373,7 +373,7 @@ class LinearCRFAligner(nn.Module):
         if (not return_soft) and (not return_hard):
             raise RuntimeError("At least one of return_soft and return_hard must be True.")
 
-        _validate_decoding_strategy(decoding_strategy)
+        validate_decoding_strategy(decoding_strategy)
 
         if spec_mask.dim() == 3:
             spec_mask = spec_mask.squeeze(1)

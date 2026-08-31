@@ -684,7 +684,11 @@ class NDAlignerTrainer(
         token_ids: torch.Tensor,
     ) -> list[str]:
         """
-        Decode token ids into per-token IPA labels for y-axis plotting.
+        Decode token ids into per-token labels for y-axis plotting.
+
+        Uses decode_to_symbols rather than decode, since the former preserves
+        one label per token id; decode drops symbols that carry no IPA
+        character, such as closure tokens.
 
         Args:
             token_ids: (T,)
@@ -693,10 +697,7 @@ class NDAlignerTrainer(
             labels: list[str], length T
         """
         token_ids = token_ids.detach().cpu().long().view(-1)
-
-        return [
-            cast(str, self.tokenizer.decode(token_ids[i : i + 1])) for i in range(token_ids.numel())
-        ]
+        return cast(list[str], self.tokenizer.decode_to_symbols(token_ids))
 
     @staticmethod
     def _strict_reachability_mask_2d(

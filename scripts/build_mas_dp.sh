@@ -25,8 +25,8 @@ echo "Built $MAS_DIR/viterbi_dp.so ($CC $MAS_CFLAGS)"
 
 # Load test
 uv run python - <<EOF
-from nd_aligner.models.modules.crf_aligner import _load_viterbi_library
+from nd_aligner.models.modules.crf_aligner import load_mas_lib
 
-library = _load_viterbi_library()
+library = load_mas_lib()
 print("Loaded viterbi_dp.so:", library.viterbi_forward_backtrack_f32)
 EOF
