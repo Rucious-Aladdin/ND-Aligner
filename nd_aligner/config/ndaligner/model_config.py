@@ -72,7 +72,7 @@ class SpecDecoderConfigs:
     dropout: float = 0.15
 
     coupling_cond_proj_dim: int = 128
-    coupling_num_refine_steps: int = 8
+    coupling_num_refine_steps: int = 6
     coupling_step_emb_dim: int = 64
     coupling_loss_decay_factor: float = 1.0
     coupling_kernel_size: int = 3

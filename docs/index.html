@@ -1,0 +1,365 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ND-Aligner</title>
+  <style>
+    :root {
+      --fg: #1a1a1a;
+      --muted: #6b6b6b;
+      --line: #e0e0e0;
+      --accent: #2b5eaa;
+      --bg-soft: #f7f7f7;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0 auto;
+      padding: 3rem 1.5rem 5rem;
+      max-width: 60rem;
+      font: 16px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      color: var(--fg);
+    }
+
+    h1 {
+      font-size: 1.9rem;
+      margin: 0 0 .3rem;
+      letter-spacing: -.01em;
+    }
+
+    h2 {
+      font-size: 1.15rem;
+      margin: 3rem 0 1rem;
+    }
+
+    .authors {
+      color: var(--muted);
+      margin: 0 0 1.2rem;
+    }
+
+    .authors a {
+      color: inherit;
+    }
+
+    .links {
+      display: flex;
+      gap: .6rem;
+      flex-wrap: wrap;
+      margin-bottom: 2rem;
+    }
+
+    .links a {
+      padding: .35rem .9rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      text-decoration: none;
+      color: var(--fg);
+      font-size: .9rem;
+    }
+
+    .links a:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .lede {
+      font-size: 1.02rem;
+    }
+
+    .lede strong {
+      font-weight: 600;
+    }
+
+    .filters {
+      display: flex;
+      gap: .5rem;
+      flex-wrap: wrap;
+      margin-bottom: 1.5rem;
+    }
+
+    .filters button {
+      padding: .3rem .8rem;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: #fff;
+      font: inherit;
+      font-size: .85rem;
+      cursor: pointer;
+    }
+
+    .filters button[aria-pressed="true"] {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: #fff;
+    }
+
+    .card {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 1.2rem;
+      margin-bottom: 1.5rem;
+    }
+
+    .card header {
+      display: flex;
+      align-items: baseline;
+      gap: .7rem;
+      margin-bottom: .8rem;
+    }
+
+    .card .corpus {
+      font-size: .72rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      padding: .1rem .45rem;
+    }
+
+    .card .transcript {
+      font-style: italic;
+      color: var(--muted);
+    }
+
+    .card img {
+      width: 100%;
+      display: block;
+      margin: .8rem 0;
+    }
+
+    audio {
+      width: 100%;
+      margin-bottom: .8rem;
+    }
+
+    .words {
+      display: flex;
+      flex-wrap: wrap;
+      gap: .35rem;
+    }
+
+    .words button {
+      padding: .25rem .6rem;
+      border: 1px solid var(--line);
+      border-radius: 5px;
+      background: #fff;
+      font: inherit;
+      font-size: .88rem;
+      cursor: pointer;
+    }
+
+    .words button:hover {
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+
+    .words button.playing {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #fff;
+    }
+
+    .words button[disabled] {
+      color: #bbb;
+      cursor: default;
+    }
+
+    .hint {
+      color: var(--muted);
+      font-size: .85rem;
+      margin: .8rem 0 .4rem;
+    }
+
+    pre {
+      background: var(--bg-soft);
+      padding: .9rem 1.1rem;
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: .85rem;
+      line-height: 1.5;
+    }
+
+    footer {
+      margin-top: 4rem;
+      color: var(--muted);
+      font-size: .85rem;
+    }
+  </style>
+</head>
+
+<body>
+
+  <h1>ND-Aligner</h1>
+  <p class="authors">
+    A neural discriminative forced aligner with asymmetric locality constraints<br>
+    Suseong Kim, Young-Joo Suh &middot; POSTECH
+  </p>
+
+  <div class="links">
+    <a href="">Paper</a>
+    <a href="https://github.com/Rucious-Aladdin/ND-Aligner">Code</a>
+    <a href="">Derivation note</a>
+  </div>
+
+  <p class="lede">
+    ND-Aligner places every word and phone of a known transcript in time, learning
+    to do so from paired speech and text alone &mdash; with no frame-level boundary
+    labels and no pronunciation dictionary.
+  </p>
+
+  <h2>Alignments</h2>
+
+  <div class="filters" id="filters"></div>
+  <div id="samples"></div>
+
+  <h2>Using it</h2>
+
+  <pre><code>git clone https://github.com/Rucious-Aladdin/ND-Aligner.git
+cd ND-Aligner &amp;&amp; uv sync --locked
+scripts/build_fb_kernel.sh &amp;&amp; scripts/build_mas_dp.sh</code></pre>
+
+  <pre><code>aligner.align_to_textgrid(
+    wav_paths=["utt.wav"],
+    texts=["She had your dark suit in greasy wash water all year."],
+    output_dir="./textgrids",
+)</code></pre>
+
+  <footer>
+    Audio is drawn from TIMIT, Buckeye, and VCTK. The alignments shown are the
+    model's own output, not corrected by hand.
+  </footer>
+
+  <script>
+    const SAMPLES_URL = "samples.json";
+    const SAMPLES_DIR = "samples";
+
+    let current = null;
+
+    function play(src, button) {
+      if (current) {
+        current.audio.pause();
+        current.button.classList.remove("playing");
+      }
+
+      const audio = new Audio(src);
+      button.classList.add("playing");
+      current = { audio, button };
+
+      audio.addEventListener("ended", () => {
+        button.classList.remove("playing");
+        if (current && current.audio === audio) current = null;
+      });
+
+      audio.play();
+    }
+
+    function renderCard(sample) {
+      const card = document.createElement("article");
+      card.className = "card";
+      card.dataset.corpus = sample.corpus;
+
+      const base = `${SAMPLES_DIR}/${sample.id}`;
+
+      const header = document.createElement("header");
+      if (sample.corpus) {
+        const tag = document.createElement("span");
+        tag.className = "corpus";
+        tag.textContent = sample.corpus;
+        header.append(tag);
+      }
+      const transcript = document.createElement("span");
+      transcript.className = "transcript";
+      transcript.textContent = sample.transcript;
+      header.append(transcript);
+      card.append(header);
+
+      const figure = document.createElement("img");
+      figure.src = `${base}/${sample.figure}`;
+      figure.alt = `Word and phone alignment for ${sample.id}`;
+      figure.loading = "lazy";
+      card.append(figure);
+
+      const player = document.createElement("audio");
+      player.controls = true;
+      player.preload = "none";
+      player.src = `${base}/${sample.audio}`;
+      card.append(player);
+
+      const hint = document.createElement("p");
+      hint.className = "hint";
+      hint.textContent = "Play a single word to check its boundaries:";
+      card.append(hint);
+
+      const words = document.createElement("div");
+      words.className = "words";
+
+      for (const word of sample.words) {
+        const button = document.createElement("button");
+        button.textContent = word.label;
+
+        if (word.clip) {
+          button.addEventListener("click", () => play(`${base}/${word.clip}`, button));
+        } else {
+          button.disabled = true;
+          button.title = "too short to clip";
+        }
+
+        words.append(button);
+      }
+
+      card.append(words);
+      return card;
+    }
+
+    function renderFilters(corpora, onSelect) {
+      const box = document.getElementById("filters");
+      const labels = ["All", ...corpora];
+
+      for (const label of labels) {
+        const button = document.createElement("button");
+        button.textContent = label;
+        button.setAttribute("aria-pressed", label === "All");
+
+        button.addEventListener("click", () => {
+          for (const other of box.children) other.setAttribute("aria-pressed", "false");
+          button.setAttribute("aria-pressed", "true");
+          onSelect(label);
+        });
+
+        box.append(button);
+      }
+    }
+
+    fetch(SAMPLES_URL)
+      .then((response) => response.json())
+      .then((samples) => {
+        const container = document.getElementById("samples");
+        const cards = samples.map(renderCard);
+        cards.forEach((card) => container.append(card));
+
+        const corpora = [...new Set(samples.map((s) => s.corpus).filter(Boolean))];
+
+        if (corpora.length > 1) {
+          renderFilters(corpora, (label) => {
+            for (const card of cards) {
+              card.hidden = label !== "All" && card.dataset.corpus !== label;
+            }
+          });
+        }
+      })
+      .catch(() => {
+        document.getElementById("samples").innerHTML =
+          "<p>Could not load <code>samples.json</code>. " +
+          "Run <code>scripts/build_demo.py</code> first.</p>";
+      });
+  </script>
+
+</body>
+
+</html>
