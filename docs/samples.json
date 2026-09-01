@@ -1,0 +1,78 @@
+[
+  {
+    "id": "SA1",
+    "corpus": "TIMIT",
+    "transcript": "She had your dark suit in greasy wash water all year",
+    "duration": 3.968,
+    "audio": "audio.mp3",
+    "figure": "grid.png",
+    "words": [
+      {
+        "label": "She",
+        "start": 0.65,
+        "end": 0.83,
+        "clip": "w00.mp3"
+      },
+      {
+        "label": "had",
+        "start": 0.83,
+        "end": 1.06,
+        "clip": "w01.mp3"
+      },
+      {
+        "label": "your",
+        "start": 1.06,
+        "end": 1.17,
+        "clip": "w02.mp3"
+      },
+      {
+        "label": "dark",
+        "start": 1.22,
+        "end": 1.49,
+        "clip": "w03.mp3"
+      },
+      {
+        "label": "suit",
+        "start": 1.49,
+        "end": 1.82,
+        "clip": "w04.mp3"
+      },
+      {
+        "label": "in",
+        "start": 1.82,
+        "end": 2.0,
+        "clip": "w05.mp3"
+      },
+      {
+        "label": "greasy",
+        "start": 2.02,
+        "end": 2.41,
+        "clip": "w06.mp3"
+      },
+      {
+        "label": "wash",
+        "start": 2.41,
+        "end": 2.82,
+        "clip": "w07.mp3"
+      },
+      {
+        "label": "water",
+        "start": 2.83,
+        "end": 3.23,
+        "clip": "w08.mp3"
+      },
+      {
+        "label": "all",
+        "start": 3.23,
+        "end": 3.44,
+        "clip": "w09.mp3"
+      },
+      {
+        "label": "year",
+        "start": 3.44,
+        "end": 3.8,
+        "clip": "w10.mp3"
+      }
+    ]
+  }
+]
