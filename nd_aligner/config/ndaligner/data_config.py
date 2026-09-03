@@ -7,9 +7,11 @@ from dataclasses import dataclass, field
 from ..preprocess.preprocess_config import SPK_ENCODER_TYPE, PreprocessConfigs
 
 INPUT_FEATURE_TYPE = "mel"
-# INPUT_FEATURE_TYPE: str = "linspec"
+# INPUT_FEATURE_TYPE: str = "linspec" # do not use this! bad performance :(
 
 DATA_PARENT_DIR = "/shared/data_zfs/blue2959"
+
+# Closure token expansions -> espeak_closure
 TOKENIZER_TYPE: str = "espeak_closure"  # "espeak"
 
 N_MELS = 80
@@ -105,7 +107,10 @@ class DatasetConfigs:
         ),
     )
     libritts_subsets: list[str] = field(
-        default_factory=lambda: ["train-clean-100", "train-clean-360"]
+        default_factory=lambda: [
+            "train-clean-100",
+            "train-clean-360",
+        ]
     )  # train-clean-360
 
     librispeech_root: str = os.path.join(
@@ -138,7 +143,7 @@ class DatasetConfigs:
 
 @dataclass(frozen=True)
 class ExperimentConfigs:
-    train_time_eval_logging: bool = True
+    train_time_eval_logging: bool = True  # set False if you don't have TIMIT
     train_time_eval_per_step: int = 1000
 
     base_dir: str = "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.3/main"
@@ -175,7 +180,7 @@ class TrainConfigs:
 
     # --- Training Loop Limits ---
     max_epochs: int = 1
-    max_steps: int = 300000  # deprecated
+    max_steps: int = 300000  # deprecated (useless)
 
     # --- Hardware & Dataloader ---
     seed: int = 1234

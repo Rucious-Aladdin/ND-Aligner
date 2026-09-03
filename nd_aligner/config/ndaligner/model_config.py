@@ -35,7 +35,7 @@ def spec_indim() -> int:
 
 
 def n_vocabs() -> int:
-    return tokenizer.n_vocab * 2
+    return tokenizer.n_vocab * 2  # margin of n_vocab..
 
 
 @dataclass(frozen=True)
@@ -74,7 +74,7 @@ class SpecDecoderConfigs:
     coupling_cond_proj_dim: int = 128
     coupling_num_refine_steps: int = 6
     coupling_step_emb_dim: int = 64
-    coupling_loss_decay_factor: float = 1.0
+    coupling_loss_decay_factor: float = 1.0  # (w_st in TCD)
     coupling_kernel_size: int = 3
     coupling_normalize_loss_weights: bool = True
     coupling_stage_loss_mode: str = "geometric"
@@ -88,7 +88,7 @@ class CRFAlignerConfigs:
     dim_unary_latent: int = 128
     cond_channels: int = 32
 
-    # unary network configs
+    # unary network configs (estimate node potentials of CRF!)
     unary_network_type: str = "conv"  # "conv" "l2"
     unary_support_type: str = "global"  # "global", "raw", "bernoulli"
     unary_temperature: float = 1.0
@@ -125,6 +125,7 @@ class NDAlignerConfigs:
     use_delta_delta_feat: bool = USE_DELTA_DELTA_FEAT
     use_optional_skip_sep: bool = USE_OPTIONAL_SKIP_SEP
 
-    tokenizer_type: str = TOKENIZER_TYPE
-    separator_token_id: int = tokenizer.seperator_id
+    # AH_text -> A*H_text using viterbi alignment. it degrades performances. not recommend to use this.
     viterbi_ste_training: bool = False
+    tokenizer_type: str = TOKENIZER_TYPE
+    separator_token_id: int = tokenizer.seperator_id  # the word seperator. (optional silence state)

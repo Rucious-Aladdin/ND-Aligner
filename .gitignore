@@ -2,7 +2,6 @@
 
 runs/
 ljspeech_runs/
-checkpoints/
 debug_outputs/
 eval/
 exp_configs/**/*.json
@@ -26,3 +25,12 @@ __pycache__/
 # Machine-specific files
 /.clangd
 *.so
+
+
+checkpoints/*
+
+!checkpoints/ndaligner/
+checkpoints/ndaligner/*
+
+!checkpoints/ndaligner/v2.3/
+!checkpoints/ndaligner/v2.3/**

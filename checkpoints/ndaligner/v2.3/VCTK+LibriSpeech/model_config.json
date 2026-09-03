@@ -1,0 +1,107 @@
+{
+    "nd_aligner": {
+        "txt_enc": {
+            "n_vocab": 360,
+            "dim_out": 128,
+            "dim_hidden": 192,
+            "dim_cond": 256,
+            "kernel_sizes": [
+                1
+            ]
+        },
+        "spec_enc": {
+            "in_dim": 80,
+            "out_dim": 128,
+            "hidden_dim": 192,
+            "cond_dim": 256,
+            "kernel_size": 3,
+            "dropout_p": 0.15,
+            "dilation_sizes": [
+                1,
+                1,
+                1
+            ]
+        },
+        "spec_dec": {
+            "decoder_type": "coupling",
+            "in_channels": 128,
+            "out_channels": 80,
+            "hidden_channels": 192,
+            "cond_dim": 256,
+            "kernel_sizes": [
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3,
+                3
+            ],
+            "dilation_base": 1,
+            "dropout": 0.15,
+            "coupling_cond_proj_dim": 128,
+            "coupling_num_refine_steps": 6,
+            "coupling_step_emb_dim": 64,
+            "coupling_loss_decay_factor": 1.0,
+            "coupling_kernel_size": 3,
+            "coupling_normalize_loss_weights": true,
+            "coupling_stage_loss_mode": "geometric"
+        },
+        "aligner": {
+            "dim_spec": 128,
+            "dim_text": 128,
+            "dim_cond": 256,
+            "dim_unary_latent": 128,
+            "cond_channels": 32,
+            "unary_network_type": "conv",
+            "unary_support_type": "global",
+            "unary_temperature": 1.0,
+            "unary_scale_init": -2.0,
+            "conv_num_layers": 6,
+            "conv_num_groups": 8,
+            "conv_dim_hidden": 64,
+            "conv_kernel_size": [
+                3,
+                3
+            ]
+        },
+        "input_maker": {
+            "zero_non_speech_region": true,
+            "trim_non_speech_region": true,
+            "reduce_noise": false,
+            "suppress_impulsive_peak": false
+        },
+        "preprocess": {
+            "data_root_dir": "/shared/data_zfs/blue2959/LibriSpeech",
+            "preprocessed_dir": "/shared/data_zfs/blue2959/LibriSpeech-preprocessed-trimmed-16k",
+            "spk_encoder_type": "resemblyzer",
+            "spk_embedding_dim": 256,
+            "resample_sr": 16000,
+            "silence_trim": true,
+            "denoise_before_vad": false,
+            "lpf_before_vad": false,
+            "lpf_cutoff_freq": 4000.0,
+            "silence_margin_sec": 0.0,
+            "peak_normalize": true,
+            "peak_target": 0.6
+        },
+        "audio": {
+            "sr": 16000,
+            "feature_type": "mel",
+            "n_fft": 1024,
+            "hop_length": 160,
+            "win_length": 400,
+            "n_mels": 80,
+            "f_min": 0.0,
+            "f_max": 8000.0,
+            "num_freq": 513
+        },
+        "use_delta_feat": false,
+        "use_delta_delta_feat": false,
+        "use_optional_skip_sep": true,
+        "tokenizer_type": "espeak_closure",
+        "separator_token_id": 15,
+        "viterbi_ste_training": false
+    }
+}

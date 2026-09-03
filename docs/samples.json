@@ -1,251 +1,5 @@
 [
   {
-    "id": "SI1103",
-    "corpus": "TIMIT",
-    "transcript": "Their work mirrors the mentality of the psychopath rootless and irresponsible",
-    "duration": 6.0864375,
-    "audio": "audio.mp3",
-    "figure": "grid.png",
-    "words": [
-      {
-        "label": "Their",
-        "start": 0.26,
-        "end": 0.48,
-        "clip": "w00.mp3"
-      },
-      {
-        "label": "work",
-        "start": 0.48,
-        "end": 0.93,
-        "clip": "w01.mp3"
-      },
-      {
-        "label": "mirrors",
-        "start": 1.07,
-        "end": 1.62,
-        "clip": "w02.mp3"
-      },
-      {
-        "label": "the",
-        "start": 1.68,
-        "end": 1.73,
-        "clip": null
-      },
-      {
-        "label": "mentality",
-        "start": 1.73,
-        "end": 2.62,
-        "clip": "w03.mp3"
-      },
-      {
-        "label": "of the",
-        "start": 2.66,
-        "end": 2.9,
-        "clip": "w04.mp3"
-      },
-      {
-        "label": "psychopath",
-        "start": 2.9,
-        "end": 3.78,
-        "clip": "w05.mp3"
-      },
-      {
-        "label": "rootless",
-        "start": 4.24,
-        "end": 4.85,
-        "clip": "w06.mp3"
-      },
-      {
-        "label": "and",
-        "start": 4.99,
-        "end": 5.16,
-        "clip": "w07.mp3"
-      },
-      {
-        "label": "irresponsible",
-        "start": 5.16,
-        "end": 5.97,
-        "clip": "w08.mp3"
-      }
-    ]
-  },
-  {
-    "id": "SI1610",
-    "corpus": "TIMIT",
-    "transcript": "For an instant the old aunt felt something indefinable flash through her smile",
-    "duration": 4.3584375,
-    "audio": "audio.mp3",
-    "figure": "grid.png",
-    "words": [
-      {
-        "label": "For an",
-        "start": 0.2,
-        "end": 0.54,
-        "clip": "w00.mp3"
-      },
-      {
-        "label": "instant",
-        "start": 0.56,
-        "end": 0.95,
-        "clip": "w01.mp3"
-      },
-      {
-        "label": "the",
-        "start": 0.95,
-        "end": 1.06,
-        "clip": "w02.mp3"
-      },
-      {
-        "label": "old",
-        "start": 1.06,
-        "end": 1.38,
-        "clip": "w03.mp3"
-      },
-      {
-        "label": "aunt",
-        "start": 1.39,
-        "end": 1.7,
-        "clip": "w04.mp3"
-      },
-      {
-        "label": "felt",
-        "start": 1.7,
-        "end": 1.99,
-        "clip": "w05.mp3"
-      },
-      {
-        "label": "something",
-        "start": 1.99,
-        "end": 2.41,
-        "clip": "w06.mp3"
-      },
-      {
-        "label": "indefinable",
-        "start": 2.41,
-        "end": 3.12,
-        "clip": "w07.mp3"
-      },
-      {
-        "label": "flash",
-        "start": 3.12,
-        "end": 3.5,
-        "clip": "w08.mp3"
-      },
-      {
-        "label": "through",
-        "start": 3.5,
-        "end": 3.66,
-        "clip": "w09.mp3"
-      },
-      {
-        "label": "her",
-        "start": 3.67,
-        "end": 3.77,
-        "clip": "w10.mp3"
-      },
-      {
-        "label": "smile",
-        "start": 3.77,
-        "end": 4.14,
-        "clip": "w11.mp3"
-      }
-    ]
-  },
-  {
-    "id": "SI749",
-    "corpus": "TIMIT",
-    "transcript": "Fold into whipped cream and add a dash of salt and sprinkling of paprika",
-    "duration": 6.208,
-    "audio": "audio.mp3",
-    "figure": "grid.png",
-    "words": [
-      {
-        "label": "Fold",
-        "start": 0.95,
-        "end": 1.39,
-        "clip": "w00.mp3"
-      },
-      {
-        "label": "into",
-        "start": 1.46,
-        "end": 1.76,
-        "clip": "w01.mp3"
-      },
-      {
-        "label": "whipped",
-        "start": 1.76,
-        "end": 2.05,
-        "clip": "w02.mp3"
-      },
-      {
-        "label": "cream",
-        "start": 2.06,
-        "end": 2.41,
-        "clip": "w03.mp3"
-      },
-      {
-        "label": "and",
-        "start": 2.41,
-        "end": 2.64,
-        "clip": "w04.mp3"
-      },
-      {
-        "label": "add",
-        "start": 2.64,
-        "end": 2.85,
-        "clip": "w05.mp3"
-      },
-      {
-        "label": "a",
-        "start": 2.85,
-        "end": 2.91,
-        "clip": "w06.mp3"
-      },
-      {
-        "label": "dash",
-        "start": 2.91,
-        "end": 3.25,
-        "clip": "w07.mp3"
-      },
-      {
-        "label": "of",
-        "start": 3.27,
-        "end": 3.34,
-        "clip": "w08.mp3"
-      },
-      {
-        "label": "salt",
-        "start": 3.34,
-        "end": 3.73,
-        "clip": "w09.mp3"
-      },
-      {
-        "label": "and",
-        "start": 3.79,
-        "end": 3.88,
-        "clip": "w10.mp3"
-      },
-      {
-        "label": "sprinkling",
-        "start": 3.88,
-        "end": 4.43,
-        "clip": "w11.mp3"
-      },
-      {
-        "label": "of",
-        "start": 4.45,
-        "end": 4.57,
-        "clip": "w12.mp3"
-      },
-      {
-        "label": "paprika",
-        "start": 4.57,
-        "end": 5.16,
-        "clip": "w13.mp3"
-      }
-    ]
-  },
-  {
     "id": "s0201a_chunk_0013",
     "corpus": "Buckeye",
     "transcript": "a number of years ago when we were traveling a lot and everything else i uh we did absentee voting",
@@ -255,38 +9,38 @@
     "words": [
       {
         "label": "a",
-        "start": 0.21,
-        "end": 0.22,
+        "start": 0.2,
+        "end": 0.23,
         "clip": null
       },
       {
         "label": "number",
         "start": 0.23,
-        "end": 0.45,
+        "end": 0.44,
         "clip": "w00.mp3"
       },
       {
         "label": "of",
-        "start": 0.45,
-        "end": 0.47,
+        "start": 0.44,
+        "end": 0.46,
         "clip": null
       },
       {
         "label": "years",
-        "start": 0.47,
-        "end": 0.76,
+        "start": 0.46,
+        "end": 0.75,
         "clip": "w01.mp3"
       },
       {
         "label": "ago",
-        "start": 0.76,
-        "end": 1.03,
+        "start": 0.75,
+        "end": 1.04,
         "clip": "w02.mp3"
       },
       {
         "label": "when",
-        "start": 1.03,
-        "end": 1.28,
+        "start": 1.04,
+        "end": 1.29,
         "clip": "w03.mp3"
       },
       {
@@ -303,75 +57,75 @@
       },
       {
         "label": "traveling",
-        "start": 1.55,
-        "end": 1.97,
+        "start": 1.54,
+        "end": 1.96,
         "clip": "w06.mp3"
       },
       {
         "label": "a",
-        "start": 1.97,
-        "end": 1.99,
+        "start": 1.96,
+        "end": 1.97,
         "clip": null
       },
       {
         "label": "lot",
-        "start": 1.99,
+        "start": 1.97,
         "end": 2.16,
         "clip": "w07.mp3"
       },
       {
         "label": "and",
         "start": 2.16,
-        "end": 2.22,
-        "clip": "w08.mp3"
+        "end": 2.2,
+        "clip": null
       },
       {
         "label": "everything",
-        "start": 2.22,
-        "end": 2.52,
-        "clip": "w09.mp3"
+        "start": 2.2,
+        "end": 2.51,
+        "clip": "w08.mp3"
       },
       {
         "label": "else",
-        "start": 2.52,
+        "start": 2.51,
         "end": 2.81,
-        "clip": "w10.mp3"
+        "clip": "w09.mp3"
       },
       {
         "label": "i",
         "start": 2.83,
-        "end": 3.32,
-        "clip": "w11.mp3"
+        "end": 3.33,
+        "clip": "w10.mp3"
       },
       {
         "label": "uh",
-        "start": 3.32,
+        "start": 3.33,
         "end": 3.59,
-        "clip": "w12.mp3"
+        "clip": "w11.mp3"
       },
       {
         "label": "we",
-        "start": 3.61,
-        "end": 3.79,
-        "clip": "w13.mp3"
+        "start": 3.65,
+        "end": 3.8,
+        "clip": "w12.mp3"
       },
       {
         "label": "did",
         "start": 3.8,
-        "end": 4.01,
-        "clip": "w14.mp3"
+        "end": 4.03,
+        "clip": "w13.mp3"
       },
       {
         "label": "absentee",
         "start": 4.14,
-        "end": 4.65,
-        "clip": "w15.mp3"
+        "end": 4.64,
+        "clip": "w14.mp3"
       },
       {
         "label": "voting",
-        "start": 4.65,
-        "end": 5.26,
-        "clip": "w16.mp3"
+        "start": 4.64,
+        "end": 5.04,
+        "clip": "w15.mp3"
       }
     ]
   },
@@ -385,20 +139,20 @@
     "words": [
       {
         "label": "i",
-        "start": 0.23,
-        "end": 0.39,
+        "start": 0.22,
+        "end": 0.38,
         "clip": "w00.mp3"
       },
       {
         "label": "think",
-        "start": 0.39,
+        "start": 0.38,
         "end": 0.5,
         "clip": "w01.mp3"
       },
       {
         "label": "it's",
         "start": 0.5,
-        "end": 0.61,
+        "end": 0.6,
         "clip": "w02.mp3"
       },
       {
@@ -409,7 +163,7 @@
       },
       {
         "label": "great",
-        "start": 0.69,
+        "start": 0.68,
         "end": 0.95,
         "clip": "w03.mp3"
       },
@@ -427,177 +181,177 @@
       },
       {
         "label": "the",
-        "start": 1.5,
+        "start": 1.49,
         "end": 1.55,
-        "clip": null
+        "clip": "w06.mp3"
       },
       {
         "label": "last",
         "start": 1.55,
-        "end": 1.95,
-        "clip": "w06.mp3"
+        "end": 1.94,
+        "clip": "w07.mp3"
       },
       {
         "label": "three",
-        "start": 1.95,
-        "end": 2.1,
-        "clip": "w07.mp3"
+        "start": 1.94,
+        "end": 2.11,
+        "clip": "w08.mp3"
       },
       {
         "label": "months",
         "start": 2.11,
         "end": 2.5,
-        "clip": "w08.mp3"
+        "clip": "w09.mp3"
       },
       {
         "label": "i've",
         "start": 2.51,
         "end": 2.7,
-        "clip": "w09.mp3"
+        "clip": "w10.mp3"
       },
       {
         "label": "threatened",
         "start": 2.73,
-        "end": 3.15,
-        "clip": "w10.mp3"
-      },
-      {
-        "label": "to",
-        "start": 3.15,
-        "end": 3.47,
+        "end": 3.24,
         "clip": "w11.mp3"
       },
       {
-        "label": "move",
-        "start": 3.49,
-        "end": 3.84,
+        "label": "to",
+        "start": 3.24,
+        "end": 3.47,
         "clip": "w12.mp3"
+      },
+      {
+        "label": "move",
+        "start": 3.47,
+        "end": 3.84,
+        "clip": "w13.mp3"
       },
       {
         "label": "on",
         "start": 3.84,
         "end": 3.97,
-        "clip": "w13.mp3"
+        "clip": "w14.mp3"
       },
       {
         "label": "more",
         "start": 3.97,
         "end": 4.16,
-        "clip": "w14.mp3"
+        "clip": "w15.mp3"
       },
       {
         "label": "than",
-        "start": 4.18,
+        "start": 4.17,
         "end": 4.28,
-        "clip": "w15.mp3"
+        "clip": "w16.mp3"
       },
       {
         "label": "one",
         "start": 4.28,
-        "end": 4.46,
-        "clip": "w16.mp3"
+        "end": 4.45,
+        "clip": "w17.mp3"
       },
       {
         "label": "occasion",
-        "start": 4.46,
+        "start": 4.45,
         "end": 4.98,
-        "clip": "w17.mp3"
+        "clip": "w18.mp3"
       },
       {
         "label": "because",
         "start": 4.98,
         "end": 5.25,
-        "clip": "w18.mp3"
+        "clip": "w19.mp3"
       },
       {
         "label": "of",
         "start": 5.25,
-        "end": 5.34,
-        "clip": "w19.mp3"
+        "end": 5.35,
+        "clip": "w20.mp3"
       },
       {
         "label": "all",
         "start": 5.35,
         "end": 5.46,
-        "clip": "w20.mp3"
+        "clip": "w21.mp3"
       },
       {
         "label": "the",
-        "start": 5.5,
+        "start": 5.49,
         "end": 5.56,
-        "clip": null
+        "clip": "w22.mp3"
       },
       {
         "label": "traffic",
         "start": 5.56,
-        "end": 6.04,
-        "clip": "w21.mp3"
+        "end": 6.05,
+        "clip": "w23.mp3"
       },
       {
         "label": "congestion",
         "start": 6.05,
         "end": 6.7,
-        "clip": "w22.mp3"
+        "clip": "w24.mp3"
       },
       {
         "label": "and",
         "start": 6.7,
         "end": 6.82,
-        "clip": "w23.mp3"
+        "clip": "w25.mp3"
       },
       {
         "label": "all",
         "start": 6.82,
         "end": 6.99,
-        "clip": "w24.mp3"
+        "clip": "w26.mp3"
       },
       {
         "label": "of the",
         "start": 6.99,
-        "end": 7.16,
-        "clip": "w25.mp3"
+        "end": 7.17,
+        "clip": "w27.mp3"
       },
       {
         "label": "road",
         "start": 7.24,
-        "end": 7.47,
-        "clip": "w26.mp3"
-      },
-      {
-        "label": "construction",
-        "start": 7.51,
-        "end": 8.13,
-        "clip": "w27.mp3"
-      },
-      {
-        "label": "you",
-        "start": 8.13,
-        "end": 8.2,
+        "end": 7.48,
         "clip": "w28.mp3"
       },
       {
-        "label": "just",
-        "start": 8.2,
-        "end": 8.4,
+        "label": "construction",
+        "start": 7.5,
+        "end": 8.12,
         "clip": "w29.mp3"
+      },
+      {
+        "label": "you",
+        "start": 8.12,
+        "end": 8.21,
+        "clip": "w30.mp3"
+      },
+      {
+        "label": "just",
+        "start": 8.21,
+        "end": 8.39,
+        "clip": "w31.mp3"
       },
       {
         "label": "can't",
         "start": 8.4,
-        "end": 8.69,
-        "clip": "w30.mp3"
+        "end": 8.71,
+        "clip": "w32.mp3"
       },
       {
         "label": "get",
         "start": 8.83,
         "end": 9.05,
-        "clip": "w31.mp3"
+        "clip": "w33.mp3"
       },
       {
         "label": "anywhere",
         "start": 9.05,
-        "end": 9.6,
-        "clip": "w32.mp3"
+        "end": 9.75,
+        "clip": "w34.mp3"
       }
     ]
   },
@@ -612,13 +366,13 @@
       {
         "label": "no",
         "start": 0.22,
-        "end": 0.51,
+        "end": 0.5,
         "clip": "w00.mp3"
       },
       {
         "label": "no",
-        "start": 0.51,
-        "end": 0.78,
+        "start": 0.5,
+        "end": 0.79,
         "clip": "w01.mp3"
       },
       {
@@ -630,12 +384,12 @@
       {
         "label": "there's",
         "start": 1.44,
-        "end": 1.61,
+        "end": 1.6,
         "clip": "w03.mp3"
       },
       {
         "label": "a",
-        "start": 1.61,
+        "start": 1.6,
         "end": 1.62,
         "clip": null
       },
@@ -659,51 +413,297 @@
       },
       {
         "label": "but",
-        "start": 2.52,
+        "start": 2.53,
         "end": 2.75,
         "clip": "w07.mp3"
       },
       {
         "label": "college",
-        "start": 2.82,
-        "end": 3.1,
+        "start": 2.8,
+        "end": 3.09,
         "clip": "w08.mp3"
       },
       {
         "label": "students",
-        "start": 3.1,
+        "start": 3.09,
         "end": 3.39,
         "clip": "w09.mp3"
       },
       {
         "label": "aren't",
         "start": 3.39,
-        "end": 3.58,
+        "end": 3.57,
         "clip": "w10.mp3"
       },
       {
         "label": "real",
-        "start": 3.58,
+        "start": 3.57,
         "end": 3.7,
         "clip": "w11.mp3"
       },
       {
         "label": "welcome",
         "start": 3.7,
-        "end": 4.13,
+        "end": 4.14,
         "clip": "w12.mp3"
       },
       {
         "label": "there",
-        "start": 4.13,
+        "start": 4.14,
         "end": 4.36,
         "clip": "w13.mp3"
       },
       {
         "label": "so",
-        "start": 4.53,
-        "end": 4.92,
+        "start": 4.54,
+        "end": 4.91,
         "clip": "w14.mp3"
+      }
+    ]
+  },
+  {
+    "id": "SI1103",
+    "corpus": "TIMIT",
+    "transcript": "Their work mirrors the mentality of the psychopath rootless and irresponsible",
+    "duration": 6.0864375,
+    "audio": "audio.mp3",
+    "figure": "grid.png",
+    "words": [
+      {
+        "label": "Their",
+        "start": 0.25,
+        "end": 0.47,
+        "clip": "w00.mp3"
+      },
+      {
+        "label": "work",
+        "start": 0.47,
+        "end": 0.95,
+        "clip": "w01.mp3"
+      },
+      {
+        "label": "mirrors",
+        "start": 1.08,
+        "end": 1.62,
+        "clip": "w02.mp3"
+      },
+      {
+        "label": "the",
+        "start": 1.67,
+        "end": 1.73,
+        "clip": "w03.mp3"
+      },
+      {
+        "label": "mentality",
+        "start": 1.73,
+        "end": 2.63,
+        "clip": "w04.mp3"
+      },
+      {
+        "label": "of the",
+        "start": 2.66,
+        "end": 2.9,
+        "clip": "w05.mp3"
+      },
+      {
+        "label": "psychopath",
+        "start": 2.9,
+        "end": 3.78,
+        "clip": "w06.mp3"
+      },
+      {
+        "label": "rootless",
+        "start": 4.24,
+        "end": 4.85,
+        "clip": "w07.mp3"
+      },
+      {
+        "label": "and",
+        "start": 4.99,
+        "end": 5.16,
+        "clip": "w08.mp3"
+      },
+      {
+        "label": "irresponsible",
+        "start": 5.16,
+        "end": 5.98,
+        "clip": "w09.mp3"
+      }
+    ]
+  },
+  {
+    "id": "SI1610",
+    "corpus": "TIMIT",
+    "transcript": "For an instant the old aunt felt something indefinable flash through her smile",
+    "duration": 4.3584375,
+    "audio": "audio.mp3",
+    "figure": "grid.png",
+    "words": [
+      {
+        "label": "For an",
+        "start": 0.2,
+        "end": 0.54,
+        "clip": "w00.mp3"
+      },
+      {
+        "label": "instant",
+        "start": 0.54,
+        "end": 0.92,
+        "clip": "w01.mp3"
+      },
+      {
+        "label": "the",
+        "start": 0.93,
+        "end": 1.05,
+        "clip": "w02.mp3"
+      },
+      {
+        "label": "old",
+        "start": 1.05,
+        "end": 1.38,
+        "clip": "w03.mp3"
+      },
+      {
+        "label": "aunt",
+        "start": 1.38,
+        "end": 1.7,
+        "clip": "w04.mp3"
+      },
+      {
+        "label": "felt",
+        "start": 1.7,
+        "end": 1.99,
+        "clip": "w05.mp3"
+      },
+      {
+        "label": "something",
+        "start": 1.99,
+        "end": 2.41,
+        "clip": "w06.mp3"
+      },
+      {
+        "label": "indefinable",
+        "start": 2.41,
+        "end": 3.13,
+        "clip": "w07.mp3"
+      },
+      {
+        "label": "flash",
+        "start": 3.13,
+        "end": 3.49,
+        "clip": "w08.mp3"
+      },
+      {
+        "label": "through",
+        "start": 3.49,
+        "end": 3.66,
+        "clip": "w09.mp3"
+      },
+      {
+        "label": "her",
+        "start": 3.66,
+        "end": 3.77,
+        "clip": "w10.mp3"
+      },
+      {
+        "label": "smile",
+        "start": 3.77,
+        "end": 4.15,
+        "clip": "w11.mp3"
+      }
+    ]
+  },
+  {
+    "id": "SI749",
+    "corpus": "TIMIT",
+    "transcript": "Fold into whipped cream and add a dash of salt and sprinkling of paprika",
+    "duration": 6.208,
+    "audio": "audio.mp3",
+    "figure": "grid.png",
+    "words": [
+      {
+        "label": "Fold",
+        "start": 0.96,
+        "end": 1.39,
+        "clip": "w00.mp3"
+      },
+      {
+        "label": "into",
+        "start": 1.45,
+        "end": 1.77,
+        "clip": "w01.mp3"
+      },
+      {
+        "label": "whipped",
+        "start": 1.77,
+        "end": 2.05,
+        "clip": "w02.mp3"
+      },
+      {
+        "label": "cream",
+        "start": 2.05,
+        "end": 2.45,
+        "clip": "w03.mp3"
+      },
+      {
+        "label": "and",
+        "start": 2.48,
+        "end": 2.64,
+        "clip": "w04.mp3"
+      },
+      {
+        "label": "add",
+        "start": 2.64,
+        "end": 2.84,
+        "clip": "w05.mp3"
+      },
+      {
+        "label": "a",
+        "start": 2.84,
+        "end": 2.91,
+        "clip": "w06.mp3"
+      },
+      {
+        "label": "dash",
+        "start": 2.91,
+        "end": 3.24,
+        "clip": "w07.mp3"
+      },
+      {
+        "label": "of",
+        "start": 3.24,
+        "end": 3.36,
+        "clip": "w08.mp3"
+      },
+      {
+        "label": "salt",
+        "start": 3.36,
+        "end": 3.73,
+        "clip": "w09.mp3"
+      },
+      {
+        "label": "and",
+        "start": 3.79,
+        "end": 3.88,
+        "clip": "w10.mp3"
+      },
+      {
+        "label": "sprinkling",
+        "start": 3.88,
+        "end": 4.43,
+        "clip": "w11.mp3"
+      },
+      {
+        "label": "of",
+        "start": 4.44,
+        "end": 4.56,
+        "clip": "w12.mp3"
+      },
+      {
+        "label": "paprika",
+        "start": 4.56,
+        "end": 5.16,
+        "clip": "w13.mp3"
       }
     ]
   },
@@ -717,37 +717,37 @@
     "words": [
       {
         "label": "he",
-        "start": 0.02,
+        "start": 0.01,
         "end": 0.1,
         "clip": "w00.mp3"
       },
       {
         "label": "had",
         "start": 0.1,
-        "end": 0.19,
+        "end": 0.2,
         "clip": "w01.mp3"
       },
       {
         "label": "never",
-        "start": 0.21,
-        "end": 0.45,
+        "start": 0.2,
+        "end": 0.44,
         "clip": "w02.mp3"
       },
       {
         "label": "seen",
-        "start": 0.45,
-        "end": 0.7,
+        "start": 0.44,
+        "end": 0.69,
         "clip": "w03.mp3"
       },
       {
         "label": "anyone",
-        "start": 0.7,
-        "end": 1.02,
+        "start": 0.69,
+        "end": 1.01,
         "clip": "w04.mp3"
       },
       {
         "label": "go",
-        "start": 1.02,
+        "start": 1.01,
         "end": 1.24,
         "clip": "w05.mp3"
       },
@@ -760,48 +760,48 @@
       {
         "label": "mister",
         "start": 1.36,
-        "end": 1.65,
+        "end": 1.67,
         "clip": "w07.mp3"
       },
       {
         "label": "wicker's",
-        "start": 1.65,
-        "end": 1.92,
+        "start": 1.67,
+        "end": 1.93,
         "clip": "w08.mp3"
       },
       {
         "label": "shop",
-        "start": 1.92,
-        "end": 2.32,
+        "start": 1.93,
+        "end": 2.33,
         "clip": "w09.mp3"
       },
       {
         "label": "now",
-        "start": 2.35,
+        "start": 2.34,
         "end": 2.52,
         "clip": "w10.mp3"
       },
       {
         "label": "he",
         "start": 2.52,
-        "end": 2.61,
+        "end": 2.62,
         "clip": "w11.mp3"
       },
       {
         "label": "thought",
-        "start": 2.61,
+        "start": 2.62,
         "end": 2.85,
         "clip": "w12.mp3"
       },
       {
         "label": "of",
         "start": 2.85,
-        "end": 2.93,
+        "end": 2.96,
         "clip": "w13.mp3"
       },
       {
         "label": "it",
-        "start": 2.95,
+        "start": 2.96,
         "end": 3.2,
         "clip": "w14.mp3"
       }
@@ -824,42 +824,42 @@
       {
         "label": "was",
         "start": 0.39,
-        "end": 0.62,
+        "end": 0.63,
         "clip": "w01.mp3"
       },
       {
         "label": "pleased",
-        "start": 0.62,
+        "start": 0.63,
         "end": 1.08,
         "clip": "w02.mp3"
       },
       {
         "label": "with the",
         "start": 1.08,
-        "end": 1.35,
+        "end": 1.33,
         "clip": "w03.mp3"
       },
       {
         "label": "version",
-        "start": 1.35,
-        "end": 1.66,
+        "start": 1.33,
+        "end": 1.67,
         "clip": "w04.mp3"
       },
       {
         "label": "of",
-        "start": 1.66,
+        "start": 1.67,
         "end": 1.8,
         "clip": "w05.mp3"
       },
       {
         "label": "that",
         "start": 1.8,
-        "end": 2.05,
+        "end": 2.04,
         "clip": "w06.mp3"
       },
       {
         "label": "remedy",
-        "start": 2.05,
+        "start": 2.04,
         "end": 2.54,
         "clip": "w07.mp3"
       },
@@ -872,43 +872,43 @@
       {
         "label": "must",
         "start": 3.84,
-        "end": 4.22,
+        "end": 4.17,
         "clip": "w09.mp3"
       },
       {
         "label": "repeated",
-        "start": 4.22,
+        "start": 4.17,
         "end": 4.88,
         "clip": "w10.mp3"
       },
       {
         "label": "that",
         "start": 4.89,
-        "end": 5.06,
+        "end": 5.07,
         "clip": "w11.mp3"
       },
       {
         "label": "he",
-        "start": 5.06,
+        "start": 5.08,
         "end": 5.21,
         "clip": "w12.mp3"
       },
       {
         "label": "was",
         "start": 5.21,
-        "end": 5.45,
+        "end": 5.44,
         "clip": "w13.mp3"
       },
       {
         "label": "very",
         "start": 5.46,
-        "end": 5.83,
+        "end": 5.81,
         "clip": "w14.mp3"
       },
       {
         "label": "provincial",
-        "start": 5.83,
-        "end": 6.49,
+        "start": 5.81,
+        "end": 6.47,
         "clip": "w15.mp3"
       }
     ]
@@ -923,43 +923,43 @@
     "words": [
       {
         "label": "he",
-        "start": 0.02,
-        "end": 0.08,
+        "start": 0.01,
+        "end": 0.09,
         "clip": "w00.mp3"
       },
       {
         "label": "said",
-        "start": 0.08,
-        "end": 0.37,
+        "start": 0.09,
+        "end": 0.36,
         "clip": "w01.mp3"
       },
       {
         "label": "it",
-        "start": 0.37,
+        "start": 0.36,
         "end": 0.51,
         "clip": "w02.mp3"
       },
       {
         "label": "was",
         "start": 0.51,
-        "end": 0.67,
+        "end": 0.68,
         "clip": "w03.mp3"
       },
       {
         "label": "our",
-        "start": 0.67,
+        "start": 0.68,
         "end": 0.82,
         "clip": "w04.mp3"
       },
       {
         "label": "only",
-        "start": 0.83,
-        "end": 1.09,
+        "start": 0.82,
+        "end": 1.08,
         "clip": "w05.mp3"
       },
       {
         "label": "chance",
-        "start": 1.09,
+        "start": 1.08,
         "end": 1.47,
         "clip": "w06.mp3"
       },
@@ -978,44 +978,44 @@
       {
         "label": "a",
         "start": 1.97,
-        "end": 2.03,
-        "clip": null
-      },
-      {
-        "label": "telegram",
-        "start": 2.05,
-        "end": 2.72,
+        "end": 2.04,
         "clip": "w09.mp3"
       },
       {
-        "label": "radprop",
-        "start": 3.0,
-        "end": 3.44,
+        "label": "telegram",
+        "start": 2.04,
+        "end": 2.73,
         "clip": "w10.mp3"
+      },
+      {
+        "label": "radprop",
+        "start": 2.99,
+        "end": 3.44,
+        "clip": "w11.mp3"
       },
       {
         "label": "is",
         "start": 3.44,
         "end": 3.64,
-        "clip": "w11.mp3"
+        "clip": "w12.mp3"
       },
       {
         "label": "in",
         "start": 3.71,
-        "end": 4.02,
-        "clip": "w12.mp3"
+        "end": 4.03,
+        "clip": "w13.mp3"
       },
       {
         "label": "to",
-        "start": 4.13,
+        "start": 4.12,
         "end": 4.27,
-        "clip": "w13.mp3"
+        "clip": "w14.mp3"
       },
       {
         "label": "night",
         "start": 4.27,
-        "end": 4.53,
-        "clip": "w14.mp3"
+        "end": 4.52,
+        "clip": "w15.mp3"
       }
     ]
   }

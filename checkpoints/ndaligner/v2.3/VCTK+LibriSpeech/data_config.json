@@ -1,0 +1,118 @@
+{
+    "preprocess": {
+        "data_root_dir": "/shared/data_zfs/blue2959/LibriSpeech",
+        "preprocessed_dir": "/shared/data_zfs/blue2959/LibriSpeech-preprocessed-trimmed-16k",
+        "spk_encoder_type": "resemblyzer",
+        "spk_embedding_dim": 256,
+        "resample_sr": 16000,
+        "silence_trim": true,
+        "denoise_before_vad": false,
+        "lpf_before_vad": false,
+        "lpf_cutoff_freq": 4000.0,
+        "silence_margin_sec": 0.0,
+        "peak_normalize": true,
+        "peak_target": 0.6
+    },
+    "audio": {
+        "sr": 16000,
+        "feature_type": "mel",
+        "n_fft": 1024,
+        "hop_length": 160,
+        "win_length": 400,
+        "n_mels": 80,
+        "f_min": 0.0,
+        "f_max": 8000.0,
+        "num_freq": 513
+    },
+    "dataset": {
+        "dataset_list": [
+            "vctk",
+            "librispeech"
+        ],
+        "ljspeech_root": "/shared/data_zfs/blue2959/LJSpeech-1.1-preprocessed-16k",
+        "ljspeech_num_test_samples": 30,
+        "vctk_root": "/shared/data_zfs/blue2959/VCTK-preprocessed-trimmed-16k",
+        "vctk_test_speakers": [],
+        "libritts_root": "/shared/data_zfs/blue2959/LibriTTS-preprocessed-trimmed-16k",
+        "libritts_subsets": [
+            "train-clean-100",
+            "train-clean-360"
+        ],
+        "librispeech_root": "/shared/data_zfs/blue2959/LibriSpeech-preprocessed-trimmed-16k",
+        "librispeech_subsets": [
+            "train-clean-100",
+            "train-clean-360",
+            "train-other-500"
+        ],
+        "data_cache_dir": "/shared/data_zfs/blue2959/cache-vctk-feature_mel80_sr16000_hop160_win400-tokenizer_espeak_closure-spk_resemblyzer",
+        "seed": 1234,
+        "val_ratio": 0.001,
+        "num_buckets": 10,
+        "min_duration_sec": 1.5,
+        "max_duration_sec": 15.0,
+        "tokenizer_type": "espeak_closure"
+    },
+    "train": {
+        "log_dir": "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.3/runs/main",
+        "run_name": "nd_aligner_vctk+librispeech",
+        "continue_path": "",
+        "continue_dir": "",
+        "reset_optimizer": false,
+        "reset_scheduler": false,
+        "val_sanity_check": true,
+        "val_sanity_check_full_epoch": true,
+        "val_interval": 1,
+        "val_interval_step": -1,
+        "val_interval_step_skip_hook": false,
+        "log_interval": 10,
+        "img_log_interval": 2500,
+        "save_interval": 2500,
+        "max_epochs": 30,
+        "max_steps": 300000,
+        "seed": 1234,
+        "batch_size": 8,
+        "val_batch_size": 8,
+        "grad_accumulation_steps": 1,
+        "num_workers": 8,
+        "fp16_run": false,
+        "drop_last": true,
+        "lr": 0.0001,
+        "lr_decay_rate": 1.0,
+        "betas": [
+            0.8,
+            0.99
+        ],
+        "eps": 1e-09,
+        "weight_decay": 0.01,
+        "grad_clip_thresh": 2.0,
+        "use_tensorboard": true,
+        "keep_best_count": 3,
+        "keep_last_count": 3,
+        "monitor_loss": "recon"
+    },
+    "extra_exp": {
+        "train_time_eval_logging": true,
+        "train_time_eval_per_step": 1000,
+        "base_dir": "/shared/data_zfs/blue2959/ND_Aligner/experiments/v2.3/main",
+        "exp_name": "vctk+librispeech",
+        "exp_variant": "main",
+        "timit_val_root_dir": "/shared/data_zfs/blue2959/TIMIT_val_250/TRAIN",
+        "timit_confirm_root_dir": "/shared/data_zfs/blue2959/TIMIT_confirm_1000/TRAIN",
+        "timit_test_root_dir": "/shared/data_zfs/blue2959/TIMIT/TEST",
+        "timit_sr": 16000
+    },
+    "loss": {
+        "recon_init_weight": 15.0,
+        "recon_final_weight": 15.0,
+        "recon_start_step": 0,
+        "recon_end_step": 100000,
+        "crf_init_weight": 5.0,
+        "crf_final_weight": 5.0,
+        "crf_start_step": 0,
+        "crf_end_step": 10000,
+        "diag_init_weight": 10.0,
+        "diag_final_weight": 0.0,
+        "diag_start_step": 0,
+        "diag_end_step": 30000
+    }
+}
